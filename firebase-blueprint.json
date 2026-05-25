@@ -1,0 +1,91 @@
+{
+  "entities": {
+    "Message": {
+      "title": "Chat Message",
+      "description": "A secure cryptographic transmission",
+      "type": "object",
+      "properties": {
+        "content": { "type": "string", "description": "The ciphertext payload" },
+        "sender": { "type": "string", "description": "The sender ID" },
+        "timestamp": { "type": "number", "description": "Unix timestamp" },
+        "crypto_key": { "type": "string", "description": "The Vigenere key used" },
+        "crypto_shift": { "type": "number", "description": "The Caesar shift used" },
+        "crypto_type": { "type": "string", "description": "The algorithm type" },
+        "burn": { "type": "boolean", "description": "Self-destruct flag" },
+        "profile": {
+          "type": "object",
+          "properties": {
+            "codename": { "type": "string" },
+            "avatar": { "type": "string" },
+            "color": { "type": "string" },
+            "customColor": { "type": "string" },
+            "customAvatar": { "type": "string" },
+            "readBy": { "type": "array", "items": { "type": "string" } }
+          }
+        },
+        "isAttachment": { "type": "boolean" },
+        "fileName": { "type": "string" },
+        "reactions": {
+          "type": "object",
+          "description": "Map of reaction emojis to list of user IDs",
+          "additionalProperties": { "type": "array", "items": { "type": "string" } }
+        }
+      },
+      "required": ["content", "sender", "timestamp"]
+    },
+    "User": {
+      "title": "Network User",
+      "description": "User profile and security settings",
+      "type": "object",
+      "properties": {
+        "profile": { "$ref": "#/entities/Message/properties/profile" },
+        "masterKey": { "type": "string", "description": "User specific gate key" },
+        "status": { "type": "string", "enum": ["online", "away", "busy", "offline"] },
+        "lastActive": { "type": "number" },
+        "createdAt": { "type": "number" },
+        "isTyping": { "type": "boolean" }
+      },
+      "required": ["profile", "masterKey"]
+    },
+    "BannedEmail": {
+      "title": "Banned Email",
+      "description": "An blacklisted email id banned from accessing the terminal",
+      "type": "object",
+      "properties": {
+        "email": { "type": "string", "description": "The banned email address" },
+        "bannedAt": { "type": "number", "description": "Unix timestamp when banned" },
+        "bannedBy": { "type": "string", "description": "UID of the admin who performed the ban" },
+        "reason": { "type": "string", "description": "Optional reason for banishment" }
+      },
+      "required": ["email", "bannedAt", "bannedBy"]
+    },
+    "GlobalConfig": {
+      "title": "Global Configuration",
+      "description": "System-wide global variables and parameters",
+      "type": "object",
+      "properties": {
+        "jammedUntil": { "type": "number", "description": "Unix timestamp when signal jam expires" },
+        "jammedBy": { "type": "string", "description": "UID of the agent who initiated the jamming" }
+      },
+      "required": ["jammedUntil", "jammedBy"]
+    }
+  },
+  "firestore": {
+    "/messages/{messageId}": {
+      "schema": "Message",
+      "description": "Global secure message stream"
+    },
+    "/users/{userId}": {
+      "schema": "User",
+      "description": "User specific data"
+    },
+    "/banned_emails/{email}": {
+      "schema": "BannedEmail",
+      "description": "Blacklist of restricted entities"
+    },
+    "/globals/{globalId}": {
+      "schema": "GlobalConfig",
+      "description": "Global status / configurations"
+    }
+  }
+}

@@ -1,0 +1,125 @@
+rules_version = '2';
+service cloud.firestore {
+  match /databases/{database}/documents {
+    
+    // 0. Global Safety Net
+    match /{document=**} {
+      allow read, write: if false;
+    }
+
+    // --- Helper Primitives ---
+    function isSignedIn() {
+      return request.auth != null;
+    }
+
+    function isAdmin() {
+      return isSignedIn() && (
+        request.auth.token.email == 'omsnew7@gmail.com' ||
+        request.auth.token.email == 'siddhi68sharma@gmail.com'
+      );
+    }
+
+    function isBanned() {
+      return isSignedIn() && exists(/databases/$(database)/documents/banned_emails/$(request.auth.token.email));
+    }
+
+    function isValidId(id) {
+      return id is string && id.size() <= 128 && id.matches('^[a-zA-Z0-9_\\-]+$');
+    }
+
+    function incoming() {
+      return request.resource.data;
+    }
+
+    function isValidMessage(data) {
+      return data.keys().hasAll(['content', 'sender', 'timestamp', 'crypto_key', 'crypto_shift', 'crypto_type', 'burn', 'profile', 'readBy'])
+          && data.keys().size() >= 9 && data.keys().size() <= 14
+          && data.content is string && data.content.size() <= 20000
+          && data.sender is string && data.sender.size() <= 128
+          && data.timestamp is number
+          && data.crypto_key is string && data.crypto_key.size() <= 64
+          && data.crypto_shift is number && data.crypto_shift >= 0 && data.crypto_shift <= 100
+          && data.crypto_type is string
+          && data.burn is bool
+          && data.readBy is list
+          && (!data.keys().contains('decryptLogs') || data.decryptLogs is list)
+          && data.profile is map
+          && data.profile.codename is string && data.profile.codename.size() <= 32
+          && data.profile.avatar is string && data.profile.avatar.size() <= 32
+          && data.profile.color is string && data.profile.color.size() <= 32;
+    }
+
+    function isValidUser(data) {
+      return data.keys().hasAll(['profile', 'masterKey', 'createdAt'])
+          && data.keys().size() >= 3 && data.keys().size() <= 7
+          && data.profile is map
+          && data.profile.codename is string && data.profile.codename.size() <= 32
+          && data.masterKey is string && data.masterKey.size() >= 4 && data.masterKey.size() <= 64
+          && data.createdAt is number
+          && (!data.keys().contains('email') || data.email is string && data.email.size() <= 256)
+          && (!data.keys().contains('status') || data.status in ['online', 'away', 'busy', 'offline'])
+          && (!data.keys().contains('isTyping') || data.isTyping is bool)
+          && (!data.keys().contains('lastActive') || data.lastActive is number);
+    }
+
+    function isValidBannedEmail(data) {
+      return data.keys().hasAll(['email', 'bannedAt', 'bannedBy'])
+          && data.keys().size() >= 3 && data.keys().size() <= 4
+          && data.email is string && data.email.size() <= 256
+          && data.bannedAt is number
+          && data.bannedBy is string && data.bannedBy.size() <= 128
+          && (!data.keys().contains('reason') || data.reason is string && data.reason.size() <= 1000);
+    }
+
+    function isValidGlobal(data) {
+      return data.keys().hasAll(['jammedUntil', 'jammedBy'])
+          && data.keys().size() == 2
+          && data.jammedUntil is number
+          && data.jammedBy is string && data.jammedBy.size() <= 128;
+    }
+
+    // --- Collection: Messages ---
+    match /messages/{messageId} {
+      allow read: if isSignedIn() && !isBanned();
+      allow create: if isSignedIn() && !isBanned() && isValidMessage(incoming()) && incoming().sender == request.auth.uid;
+      
+      // Rule: Allow updating the readBy array (atomic append), decryptLogs, or reactions
+      allow update: if isSignedIn() && !isBanned()
+        && (
+          (incoming().diff(existing()).affectedKeys().hasOnly(['readBy'])
+            && incoming().readBy.size() >= existing().readBy.size()
+            && (incoming().readBy.size() == 0 || incoming().readBy[incoming().readBy.size() - 1] == request.auth.uid))
+          ||
+          (incoming().diff(existing()).affectedKeys().hasOnly(['decryptLogs'])
+            && incoming().decryptLogs.size() >= existing().decryptLogs.size()
+            && (incoming().decryptLogs.size() == 0 || incoming().decryptLogs[incoming().decryptLogs.size() - 1].uid == request.auth.uid))
+          ||
+          (incoming().diff(existing()).affectedKeys().hasOnly(['reactions']))
+        );
+
+      allow delete: if false;
+    }
+
+    // --- Collection: Users ---
+    match /users/{userId} {
+      allow read: if isSignedIn() && !isBanned();
+      allow create: if isSignedIn() && !isBanned() && request.auth.uid == userId && isValidUser(incoming());
+      allow update: if isSignedIn() && !isBanned() && request.auth.uid == userId && isValidUser(incoming());
+      allow delete: if false;
+    }
+
+    // --- Collection: Banned Emails ---
+    match /banned_emails/{email} {
+      allow read: if isSignedIn();
+      allow create, update: if isSignedIn() && isAdmin() && isValidBannedEmail(incoming());
+      allow delete: if isSignedIn() && isAdmin();
+    }
+
+    // --- Collection: Globals ---
+    match /globals/{globalId} {
+      allow read: if isSignedIn() && !isBanned();
+      allow create, update: if isSignedIn() && !isBanned() && isValidGlobal(incoming());
+      allow delete: if false;
+    }
+  }
+}
