@@ -1,10 +1,10 @@
 {
-  "projectId": "climbing-caldron-707pf",
-  "appId": "1:195732026537:web:3964e12dd31cc3463fa5b8",
-  "apiKey": "AIzaSyCASGjIdUjWlCpYNEbqffGvvkObwHY9ESk",
-  "authDomain": "climbing-caldron-707pf.firebaseapp.com",
+  "projectId": "vignetwork-e8380",
+  "appId": "1:683208719604:web:5f57189c65650b14bd72a1",
+  "apiKey": "AIzaSyAsPlcTUqTl5In-i6GM0MnTci8_cwTnvPM",
+  "authDomain": "vignetwork-e8380.firebaseapp.com",
   "firestoreDatabaseId": "ai-studio-60c1426f-44b3-454e-8228-e94f9c65c25c",
-  "storageBucket": "climbing-caldron-707pf.firebasestorage.app",
-  "messagingSenderId": "195732026537",
+  "storageBucket": "vignetwork-e8380.firebasestorage.app",
+  "messagingSenderId": "683208719604",
   "measurementId": ""
 }
