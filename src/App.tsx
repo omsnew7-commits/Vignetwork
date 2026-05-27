@@ -39,10 +39,13 @@ import {
   Paperclip,
   Brain,
   X,
+  Plus,
   ShieldAlert,
   Check,
   Unlock,
-  Ban
+  Ban,
+  Mic,
+  MicOff,
 } from 'lucide-react';
 import { motion, AnimatePresence } from 'motion/react';
 import { 
@@ -64,6 +67,7 @@ import { Cipher, CipherType } from './lib/cipher';
 import VigenereSquare from './components/VigenereSquare';
 import TypingDecoderText from './components/TypingDecoderText';
 import PythonTerminal from './components/PythonTerminal';
+import { AudioVisualizer } from './components/AudioVisualizer';
 
 // Global Types (Consolidated)
 export interface AgentProfile {
@@ -72,6 +76,7 @@ export interface AgentProfile {
   color: string;
   customColor?: string;
   customAvatar?: string;
+  receiveAnimation?: string;
 }
 
 export interface ChatMessage {
@@ -282,12 +287,22 @@ export default function App() {
   const [globalFailedAttempts, setGlobalFailedAttempts] = useState(0);
   const [gateFailedAttempts, setGateFailedAttempts] = useState(0);
 
+  // Reset Password states
+  const [currentPasswordInput, setCurrentPasswordInput] = useState('');
+  const [newPasswordInput, setNewPasswordInput] = useState('');
+  const [isOriginalVerified, setIsOriginalVerified] = useState(false);
+  const [pwdError, setPwdError] = useState('');
+  const [pwdSuccess, setPwdSuccess] = useState('');
+
+  // Lab copy status
+  const [encodeCopied, setEncodeCopied] = useState(false);
+  const [decodeCopied, setDecodeCopied] = useState(false);
+
   useEffect(() => {
     if (user?.email === 'omsnew7@gmail.com') {
+      setOnboardingCodename('OMS');
       setOnboardingKey('14062013');
       setOnboardingPersonalPassword('14062013');
-      setUserMasterKey('14062013');
-      setUserPersonalPassword('14062013');
     }
   }, [user]);
 
@@ -295,10 +310,38 @@ export default function App() {
   const [profile, setProfile] = useState<AgentProfile>({
     codename: `AGENT_${Math.floor(Math.random() * 9000 + 1000)}`,
     avatar: 'Shield',
-    color: 'indigo'
+    color: 'indigo',
+    receiveAnimation: 'none'
   });
   const [userStatus, setUserStatus] = useState<'online' | 'busy' | 'away'>('online');
   const [showProfileModal, setShowProfileModal] = useState(false);
+  const [draftProfile, setDraftProfile] = useState<AgentProfile>({
+    codename: '',
+    avatar: 'Shield',
+    color: 'indigo',
+    receiveAnimation: 'none'
+  });
+  const [draftStatus, setDraftStatus] = useState<'online' | 'busy' | 'away'>('online');
+  const [previewAnimKey, setPreviewAnimKey] = useState(0);
+
+  useEffect(() => {
+    if (showProfileModal) {
+      setPreviewAnimKey(prev => prev + 1);
+    }
+  }, [
+    draftProfile.receiveAnimation,
+    draftProfile.color,
+    draftProfile.customColor,
+    draftProfile.avatar,
+    draftProfile.customAvatar,
+    showProfileModal
+  ]);
+
+  const openProfileModal = () => {
+    setDraftProfile(profile);
+    setDraftStatus(userStatus);
+    setShowProfileModal(true);
+  };
 
   // --- View State ---
   const [activeTab, setActiveTab] = useState<'chat' | 'lab'>('chat');
@@ -320,10 +363,200 @@ export default function App() {
   const [screenShake, setScreenShake] = useState(false);
   const [isSudoMode, setIsSudoMode] = useState(false);
   const [showQuickActions, setShowQuickActions] = useState(false);
+  const [quickActionSearch, setQuickActionSearch] = useState('');
+  const [infiniteMode, setInfiniteMode] = useState(false);
 
   // --- Chat State ---
   const [messages, setMessages] = useState<ChatMessage[]>([]);
   const [inputMessage, setInputMessage] = useState('');
+  const [isListening, setIsListening] = useState(false);
+  const [interimTranscript, setInterimTranscript] = useState('');
+  const recognitionRef = useRef<any>(null);
+
+  useEffect(() => {
+    return () => {
+      if (recognitionRef.current) {
+        recognitionRef.current.abort();
+      }
+    };
+  }, []);
+
+  const toggleSpeechRecognition = () => {
+    const SpeechRecognition = (window as any).SpeechRecognition || (window as any).webkitSpeechRecognition;
+    if (!SpeechRecognition) {
+      setSystemAlert('WEB SPEECH API NOT SUPPORTED IN THIS BROWSER.');
+      playSynthSound?.('alarm');
+      return;
+    }
+
+    if (isListening) {
+      if (recognitionRef.current) {
+        try {
+          recognitionRef.current.stop();
+        } catch (e) {
+          console.warn('Error while stopping speech recognition:', e);
+        }
+        recognitionRef.current = null;
+      }
+      setIsListening(false);
+      setInterimTranscript('');
+      playSynthSound?.('beep');
+      setSystemAlert('VOICE RECOGNITION PAUSED.');
+    } else {
+      // Clean up any stale reference first
+      if (recognitionRef.current) {
+        try {
+          recognitionRef.current.abort();
+        } catch (e) {}
+        recognitionRef.current = null;
+      }
+
+      const rec = new SpeechRecognition();
+      rec.continuous = true;
+      rec.interimResults = true;
+      rec.lang = 'en-US';
+
+      rec.onstart = () => {
+        setIsListening(true);
+        setInterimTranscript('');
+        playSynthSound?.('beep');
+        setSystemAlert('VOICE RECOGNITION ONLINE. LISTEN TO CAPTURE...');
+      };
+
+      rec.onend = () => {
+        setIsListening(false);
+        setInterimTranscript('');
+        recognitionRef.current = null;
+      };
+
+      rec.onerror = (event: any) => {
+        console.error('Speech recognition error', event.error);
+        setIsListening(false);
+        setInterimTranscript('');
+        recognitionRef.current = null;
+        
+        if (event.error === 'not-allowed') {
+          setSystemAlert('MIC ACCESS DENIED. CHECK PERMISSIONS.');
+        } else if (event.error === 'network') {
+          setSystemAlert('NETWORK DISCONNECTION. SPEECH RECOGNITION SERVICE OFFLINE.');
+        } else if (event.error === 'aborted') {
+          setSystemAlert('VOICE SESSION ABORTED.');
+        } else {
+          setSystemAlert(`VOICE RECON ERROR: ${event.error.toUpperCase()}`);
+        }
+        playSynthSound?.('alarm');
+      };
+
+      rec.onresult = (event: any) => {
+        let finalTranscript = '';
+        let interimText = '';
+        for (let i = event.resultIndex; i < event.results.length; ++i) {
+          if (event.results[i].isFinal) {
+            finalTranscript += event.results[i][0].transcript;
+          } else {
+            interimText += event.results[i][0].transcript;
+          }
+        }
+
+        if (finalTranscript) {
+          const spoken = finalTranscript.trim().toLowerCase();
+          let interpretedCommand: string | null = null;
+          
+          if (
+            spoken.startsWith('slash ') || 
+            spoken.startsWith('backslash ') || 
+            spoken.startsWith('run ') || 
+            spoken.startsWith('execute ') || 
+            spoken.startsWith('command ') || 
+            spoken.startsWith('protocol ')
+          ) {
+            const cleanSpoken = spoken
+              .replace(/^(slash|backslash|run|execute|command|protocol)\s+/, '')
+              .trim();
+            
+            if (cleanSpoken.startsWith('help')) {
+              interpretedCommand = '/help';
+            } else if (cleanSpoken.startsWith('matrix') || cleanSpoken.startsWith('rain') || cleanSpoken.startsWith('digital rain')) {
+              interpretedCommand = '/matrix';
+            } else if (cleanSpoken.startsWith('hack')) {
+              const target = cleanSpoken.replace(/^hack\s+/, '').trim();
+              interpretedCommand = target ? `/hack ${target}` : '/hack';
+            } else if (cleanSpoken.startsWith('burn') || cleanSpoken.startsWith('self destruct') || cleanSpoken.startsWith('self-destruct')) {
+              interpretedCommand = '/burn';
+            } else if (cleanSpoken.startsWith('who am i') || cleanSpoken.startsWith('whoami') || cleanSpoken.startsWith('clearance')) {
+              interpretedCommand = '/whoami';
+            } else if (cleanSpoken.startsWith('ping') || cleanSpoken.startsWith('latency')) {
+              interpretedCommand = '/ping';
+            } else if (cleanSpoken.startsWith('sudo') || cleanSpoken.startsWith('super user') || cleanSpoken.startsWith('super-user')) {
+              interpretedCommand = '/sudo';
+            } else if (cleanSpoken.startsWith('shake') || cleanSpoken.startsWith('screen shake')) {
+              interpretedCommand = '/shake';
+            } else if (cleanSpoken.startsWith('status')) {
+              const statusArg = cleanSpoken.replace(/^status\s+/, '').trim();
+              interpretedCommand = statusArg ? `/status ${statusArg}` : '/status';
+            } else if (cleanSpoken.startsWith('sound')) {
+              const soundArg = cleanSpoken.replace(/^sound\s+/, '').trim();
+              interpretedCommand = soundArg ? `/sound ${soundArg}` : '/sound';
+            } else if (cleanSpoken.startsWith('challenge') || cleanSpoken.startsWith('packet')) {
+              interpretedCommand = '/challenge';
+            } else if (cleanSpoken.startsWith('submit')) {
+              const codeArg = cleanSpoken.replace(/^submit\s+/, '').trim();
+              interpretedCommand = codeArg ? `/submit ${codeArg}` : '/submit';
+            } else {
+              interpretedCommand = `/${cleanSpoken}`;
+            }
+          } else if (
+            spoken.startsWith('double slash ') || 
+            spoken.startsWith('slash slash ') || 
+            spoken.startsWith('infinite') || 
+            spoken.toLowerCase().includes('infinite') ||
+            spoken.startsWith('double-slash ')
+          ) {
+            const cleanSpoken = spoken
+              .replace(/^(double\s+slash|slash\s+slash|double-slash)\s+/, '')
+              .trim();
+            if (cleanSpoken.startsWith('infinite') || spoken.includes('infinite')) {
+              interpretedCommand = '//infinite';
+            } else {
+              interpretedCommand = cleanSpoken ? `//${cleanSpoken}` : '//infinite';
+            }
+          } else if (spoken === 'infinite' || spoken === 'infinite mode') {
+            interpretedCommand = '//infinite';
+          }
+
+          if (interpretedCommand) {
+            playSynthSound?.('success');
+            setSystemAlert(`VOICE COMMAND INTERCEPTED: "${interpretedCommand.toUpperCase()}"`);
+            processCommand(interpretedCommand);
+            setInterimTranscript('');
+          } else {
+            setInputMessage((prev) => {
+              const separator = prev ? ' ' : '';
+              return prev + separator + finalTranscript.trim();
+            });
+            playSynthSound?.('success');
+            setSystemAlert('VOICE TRANSCRIPTION CAPTURED AND COMMITTED.');
+            setInterimTranscript('');
+          }
+        } else if (interimText) {
+          setInterimTranscript(interimText);
+        }
+      };
+
+      recognitionRef.current = rec;
+
+      try {
+        rec.start();
+      } catch (err: any) {
+        console.error('Failed to start speech recognition:', err);
+        setSystemAlert('FAILED TO ACQUIRE AUDIO CHANNEL.');
+        playSynthSound?.('alarm');
+        setIsListening(false);
+        setInterimTranscript('');
+        recognitionRef.current = null;
+      }
+    }
+  };
   // --- Real-time Typing Indicator State ---
   const [localIsTyping, setLocalIsTyping] = useState(false);
   const typingTimeoutRef = useRef<any>(null);
@@ -408,6 +641,7 @@ export default function App() {
   const [quickCommandSelectedIdx, setQuickCommandSelectedIdx] = useState(0);
   const mainChatInputRef = useRef<HTMLInputElement>(null);
   const quickCommandSearchInputRef = useRef<HTMLInputElement>(null);
+  const protocolKeyInputRef = useRef<HTMLInputElement>(null);
 
   useEffect(() => {
     if (showQuickCommand) {
@@ -478,6 +712,37 @@ export default function App() {
     }, 500);
     return () => clearInterval(timer);
   }, []);
+
+  // Infinite Mode Activity Stream Simulator
+  useEffect(() => {
+    if (!infiniteMode) return;
+
+    // Initial chime
+    playSynthSound?.('radar');
+
+    const interval = setInterval(() => {
+      const logs = [
+        "DECRYPTING FREQUENCY OVERFLOW SYNC...",
+        "INBOUND CARRIER DETECTED: 2.45GHz [98% SIGNAL]",
+        "STABILIZING HYBRID ENCRYPTION ALGORITHM...",
+        "MOCK INTERCEPT: 'THE EAGLE HAS DEPARTED' [VIG+CAE CERTIFIED]",
+        "FLUSHING CIPHER BUFFER CACHE... COMPLETED.",
+        "SYS_ALERT: HIGH ENTROPY DISCOVERED IN BUFFER 0x7F2C",
+        "MATRIX SIGNAL OVERLOAD: STREAM RATE IS SPEEDING UP..."
+      ];
+      const randomLog = logs[Math.floor(Math.random() * logs.length)];
+      setSystemAlert(`//STREAM: ${randomLog}`);
+      playSynthSound?.('morse');
+
+      // Randomly trigger minor shaking animations for signal disturbance effect
+      if (Math.random() > 0.6) {
+        setScreenShake(true);
+        setTimeout(() => setScreenShake(false), 200);
+      }
+    }, 4000);
+
+    return () => clearInterval(interval);
+  }, [infiniteMode]);
 
   // Listen for global jam signal
   useEffect(() => {
@@ -713,6 +978,8 @@ export default function App() {
 
   // --- Lab State ---
   const [scratchpad, setScratchpad] = useState('');
+  const [decodeMode, setDecodeMode] = useState<'single' | 'batch'>('single');
+  const [batchScratchpad, setBatchScratchpad] = useState('');
   const [labTab, setLabTab] = useState<'decrypt' | 'encode' | 'square' | 'terminal'>('terminal');
   const [encodePlaintext, setEncodePlaintext] = useState('');
   const [encodeCipherType, setEncodeCipherType] = useState<CipherType>(CipherType.HYBRID);
@@ -790,7 +1057,7 @@ export default function App() {
       (userPersonalPassword && gatePassword === userPersonalPassword) ||
       (isAdminEmail && gatePassword === SYSTEM_ADMIN_KEY) ||
       (gatePassword === SYSTEM_ADMIN_KEY) ||
-      (isOmsUser && gatePassword === '14062013');
+      (isOmsUser && !userMasterKey && gatePassword === '14062013');
 
     if (isAuthorized) {
       if (gatePassword === SYSTEM_ADMIN_KEY || (isOmsUser && gatePassword === '14062013')) {
@@ -810,10 +1077,10 @@ export default function App() {
 
   const handleOnboardingComplete = async () => {
     const isOmsUser = user?.email === 'omsnew7@gmail.com';
-    const finalKey = isOmsUser ? SYSTEM_ADMIN_KEY : onboardingKey;
-    const finalPersonalPassword = isOmsUser ? SYSTEM_ADMIN_KEY : (onboardingPersonalPassword || '');
+    const finalKey = onboardingKey || (isOmsUser ? SYSTEM_ADMIN_KEY : '');
+    const finalPersonalPassword = onboardingPersonalPassword || (isOmsUser ? SYSTEM_ADMIN_KEY : '');
 
-    if (!user || (!isOmsUser && finalKey.length < 4) || !onboardingCodename.trim()) return;
+    if (!user || finalKey.length < 4 || !onboardingCodename.trim()) return;
 
     const newProfile = {
       codename: onboardingCodename,
@@ -839,16 +1106,76 @@ export default function App() {
   };
 
   const handleProfileSync = async () => {
-    if (!user) return;
+    playSynthSound?.('success');
+    const finalProfile = draftProfile;
+    const finalStatus = draftStatus;
+    
+    // Core state updates
+    setProfile(finalProfile);
+    setUserStatus(finalStatus);
+    
+    if (!user) {
+      setSystemAlert('LOCAL PROFILE SYNCHRONIZED SUCCESSFULLY.');
+      setShowProfileModal(false);
+      return;
+    }
     try {
       await updateDoc(doc(db, 'users', user.uid), {
-        profile: profile,
-        status: userStatus,
+        profile: finalProfile,
+        status: finalStatus,
         lastActive: Date.now()
       });
       setShowProfileModal(false);
+      setSystemAlert('IDENTITY CLOUD PROFILE SYNCHRONIZED.');
     } catch (err) {
       handleFirestoreError(err, OperationType.UPDATE, `users/${user.uid}`);
+    }
+  };
+
+  const handleVerifyOriginalPassword = () => {
+    setPwdError('');
+    setPwdSuccess('');
+    if (!currentPasswordInput) {
+      setPwdError('Please enter your original password.');
+      return;
+    }
+    
+    // Check if matches userMasterKey or userPersonalPassword
+    if (currentPasswordInput === userMasterKey || (userPersonalPassword && currentPasswordInput === userPersonalPassword)) {
+      setIsOriginalVerified(true);
+      setPwdSuccess('Original password verified. Enter your new password below.');
+      playSynthSound('success');
+    } else {
+      setPwdError('Invalid original password.');
+      playSynthSound('alarm');
+    }
+  };
+
+  const handleUpdateMasterPassword = async () => {
+    setPwdError('');
+    setPwdSuccess('');
+    if (!user) return;
+    if (newPasswordInput.length < 6) {
+      setPwdError('New master password must be at least 6 characters.');
+      playSynthSound('alarm');
+      return;
+    }
+
+    try {
+      await updateDoc(doc(db, 'users', user.uid), {
+        masterKey: newPasswordInput
+      });
+      setUserMasterKey(newPasswordInput);
+      setPwdSuccess('Master password updated successfully.');
+      playSynthSound('success');
+      // Reset fields
+      setCurrentPasswordInput('');
+      setNewPasswordInput('');
+      setIsOriginalVerified(false);
+    } catch (err) {
+      handleFirestoreError(err, OperationType.UPDATE, `users/${user.uid}`);
+      setPwdError('Failed to update password.');
+      playSynthSound('alarm');
     }
   };
 
@@ -939,13 +1266,20 @@ export default function App() {
 
   // Handle Message Submission
   const processCommand = (text: string): boolean => {
-    if (!text.startsWith('/')) return false;
+    if (!text.startsWith('/') && !text.startsWith('//')) return false;
 
+    const isDouble = text.startsWith('//');
+    const startIdx = isDouble ? 2 : 1;
     const parts = text.split(' ');
-    const command = parts[0].substring(1).toLowerCase();
+    const command = parts[0].substring(startIdx).toLowerCase();
     const args = parts.slice(1);
 
     switch (command) {
+      case 'infinite':
+        setInfiniteMode(prev => !prev);
+        playSynthSound('radar');
+        setSystemAlert(`INFINITE SEQUENCE PROTOCOL: ${!infiniteMode ? 'ACTIVATED. SYSTEM SIMULATOR ON.' : 'DEENGAGED. RESTORE STABILITY.'}`);
+        break;
       case 'ai':
       case 'neural':
         if (args.length > 0) {
@@ -1155,19 +1489,18 @@ export default function App() {
     return true;
   };
 
-  const handleSendMessage = async (e: React.FormEvent) => {
-    e.preventDefault();
-    if (!inputMessage.trim() || !user) return;
+  const sendMessageDirectly = async (msgText: string) => {
+    if (!msgText.trim() || !user) return;
 
-    // Check for slash command
-    if (processCommand(inputMessage.trim())) {
+    // Check for slash/double-slash command
+    if (processCommand(msgText.trim())) {
       setInputMessage('');
       return;
     }
 
     const encrypted = autoEncrypt 
-      ? Cipher.encrypt(inputMessage, vigenereKey, caesarShift, activeCipherType)
-      : inputMessage;
+      ? Cipher.encrypt(msgText, vigenereKey, caesarShift, activeCipherType)
+      : msgText;
     
     // We omit 'id' as Firestore will generate it
     const newMessage = {
@@ -1189,6 +1522,11 @@ export default function App() {
     } catch (err) {
       handleFirestoreError(err, OperationType.CREATE, 'messages');
     }
+  };
+
+  const handleSendMessage = async (e: React.FormEvent) => {
+    e.preventDefault();
+    await sendMessageDirectly(inputMessage);
   };
 
   const handleFileUpload = async (e: React.ChangeEvent<HTMLInputElement>) => {
@@ -1571,13 +1909,24 @@ export default function App() {
         setSystemAlert("DANGER: INTEGRITY LEAK RECOGNIZED!");
         setTimeout(() => setScreenShake(false), 1500);
       }
+    },
+    {
+      command: '//infinite',
+      description: 'Toggle simulated infinite signal buffer feed activity simulator',
+      category: 'Simulations',
+      icon: 'Cpu',
+      action: () => {
+        setInfiniteMode(prev => !prev);
+        playSynthSound('radar');
+        setSystemAlert(`INFINITE SEQUENCE PROTOCOL: ${!infiniteMode ? 'ACTIVATED. SYSTEM SIMULATOR ON.' : 'DEENGAGED. RESTORE STABILITY.'}`);
+      }
     }
   ];
 
   // Match and filter commands based on query (strip prefix for better index search)
   const filteredCommands = quickCommandsList.filter(cmd => {
-    const queryClean = quickCommandSearch.trim().toLowerCase().replace(/^\//, '');
-    const cmdClean = cmd.command.toLowerCase().replace(/^\//, '');
+    const queryClean = quickCommandSearch.trim().toLowerCase().replace(/^\/+/, '');
+    const cmdClean = cmd.command.toLowerCase().replace(/^\/+/, '');
     return (
       cmdClean.includes(queryClean) ||
       cmd.description.toLowerCase().includes(queryClean) ||
@@ -1619,6 +1968,36 @@ export default function App() {
       if (e.key === 'Escape' && showQuickCommand) {
         e.preventDefault();
         setShowQuickCommand(false);
+        return;
+      }
+
+      // Alt+K focuses the protocol key input or toggles back to chat input
+      if (e.altKey && e.key.toLowerCase() === 'k') {
+        e.preventDefault();
+        if (document.activeElement === protocolKeyInputRef.current) {
+          if (mainChatInputRef.current) {
+            mainChatInputRef.current.focus();
+            setSystemAlert('DESK CONTROL: RE-ENGAGING CENTRAL COMMUNICATIONS.');
+          }
+        } else {
+          if (protocolKeyInputRef.current) {
+            protocolKeyInputRef.current.focus();
+            protocolKeyInputRef.current.select();
+            setSystemAlert('KEY CONTROL: KEY CONSOLE ENGAGED. ENTER THE DISPATCH DECRYPTION SEED.');
+          }
+        }
+        playSynthSound?.('beep');
+        return;
+      }
+
+      // Ctrl + Enter or Cmd + Enter to broadcast message
+      if ((e.ctrlKey || e.metaKey) && e.key === 'Enter' && !showQuickCommand) {
+        e.preventDefault();
+        if (inputMessage.trim()) {
+          sendMessageDirectly(inputMessage);
+          setSystemAlert('BROADCAST SHED: ENCRYPTING AND DISPATCHING PACKET...');
+          playSynthSound?.('success');
+        }
         return;
       }
 
@@ -1665,7 +2044,7 @@ export default function App() {
 
     window.addEventListener('keydown', handleKeyDown);
     return () => window.removeEventListener('keydown', handleKeyDown);
-  }, [isAuthenticated, user, showQuickCommand, quickCommandSearch, quickCommandSelectedIdx, filteredCommands]);
+  }, [isAuthenticated, user, showQuickCommand, quickCommandSearch, quickCommandSelectedIdx, filteredCommands, inputMessage]);
 
   const renderQuickCommandIcon = (iconName: string) => {
     switch (iconName) {
@@ -1682,6 +2061,7 @@ export default function App() {
       case 'Smile': return <Smile size={14} />;
       case 'Zap': return <Zap size={14} />;
       case 'UserCircle': return <UserCircle size={14} />;
+      case 'Cpu': return <Cpu size={14} />;
       default: return <Terminal size={14} />;
     }
   };
@@ -2052,7 +2432,7 @@ export default function App() {
     <motion.div 
       animate={screenShake ? { x: [-12, 12, -12, 12, -6, 6, -3, 3, 0], y: [-4, 4, -4, 4, -2, 2, -1, 1, 0] } : {}}
       transition={{ duration: 0.6 }}
-      className="flex flex-col h-screen bg-[#020617] text-slate-200 font-sans overflow-hidden p-6 gap-6"
+      className="flex flex-col min-h-screen bg-[#020617] text-slate-200 font-sans overflow-y-auto p-6 gap-6"
     >
       <AnimatePresence>
         {showMatrix && (
@@ -2129,7 +2509,7 @@ export default function App() {
           </button>
 
           <button 
-            onClick={() => setShowProfileModal(true)}
+            onClick={openProfileModal}
             className={`flex items-center gap-3 px-4 py-2 border rounded-xl transition-all shadow-sm ${impersonatedAgent ? 'bg-rose-900/40 border-rose-500/50' : 'bg-slate-900/50 border-slate-800 hover:bg-slate-800/80'}`}
           >
             <div 
@@ -2164,6 +2544,7 @@ export default function App() {
                 </div>
                 <div className="relative">
                   <input 
+                    ref={protocolKeyInputRef}
                     type="text" 
                     value={vigenereKey}
                     onChange={(e) => setVigenereKey(e.target.value.toUpperCase())}
@@ -2327,6 +2708,8 @@ export default function App() {
                               currentUserProfile={profile}
                               networkJam={networkJam}
                               playSynthSound={playSynthSound}
+                              allAgents={allAgents}
+                              autoEncrypt={autoEncrypt}
                             />
                           ))
                         )}
@@ -2361,6 +2744,28 @@ export default function App() {
                           onSubmit={handleSendMessage}
                           className="space-y-4"
                         >
+                          {isListening && (
+                            <motion.div 
+                              initial={{ opacity: 0, y: 10 }}
+                              animate={{ opacity: 1, y: 0 }}
+                              className="bg-rose-950/20 border border-rose-500/35 rounded-xl px-4 py-3 text-[10px] font-mono text-rose-300 flex items-center justify-between gap-3 animate-pulse"
+                            >
+                              <div className="flex items-center gap-2.5 min-w-0 flex-1">
+                                <span className="relative flex h-2 w-2 shrink-0">
+                                  <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-rose-400 opacity-75"></span>
+                                  <span className="relative inline-flex rounded-full h-2 w-2 bg-rose-500"></span>
+                                </span>
+                                <span className="font-extrabold uppercase tracking-widest text-rose-450 text-[8.5px]">VOICE_CAPT:</span>
+                                <div className="text-rose-250 truncate italic select-none">
+                                  {interimTranscript || 'Listening to vocal stream... Speak now.'}
+                                </div>
+                              </div>
+                              <div className="text-[8px] border border-rose-500/40 bg-rose-500/10 px-2 py-0.5 rounded uppercase font-black tracking-widest shrink-0 text-rose-400 animate-bounce">
+                                UPLINK_LIVE
+                              </div>
+                            </motion.div>
+                          )}
+
                           <div className="flex gap-4">
                              <div className="flex-1 relative">
                                {systemAlert && (
@@ -2379,18 +2784,63 @@ export default function App() {
                                  value={inputMessage}
                                  onChange={(e) => setInputMessage(e.target.value)}
                                  placeholder="ENCRYPT_DATA_PACKET... (Press '/' or 'Ctrl+K' for protocols)"
-                                 className="w-full bg-black/40 border border-slate-800 rounded-xl px-4 py-3 text-xs outline-none focus:border-indigo-500/50 text-white font-mono transition-all"
+                                 className={`w-full bg-black/40 border border-slate-800 rounded-xl pl-4 py-3 text-xs outline-none focus:border-indigo-500/50 text-white font-mono transition-all ${isListening ? 'pr-32' : 'pr-20'}`}
                                />
-                               <button 
-                                 type="button"
-                                 onClick={() => {
-                                   if (fileInputRef.current) fileInputRef.current.click();
-                                 }}
-                                 className={`absolute right-3 top-2 p-1.5 rounded-lg border transition-all text-slate-500 border-transparent hover:text-slate-300`}
-                                 title="Encapsulate as Attachment"
-                               >
-                                 <Paperclip size={14} />
-                               </button>
+                               <div className="absolute right-3 top-2 flex items-center gap-1.5">
+                                 {isListening && (
+                                   <AudioVisualizer isListening={isListening} />
+                                 )}
+                                 <div className="relative group/mic">
+                                   <button
+                                     id="voice-recognition-btn"
+                                     type="button"
+                                     onClick={toggleSpeechRecognition}
+                                     className={`p-1.5 rounded-lg border transition-all ${
+                                       isListening 
+                                         ? 'bg-rose-500/20 border-rose-500/45 text-rose-400' 
+                                         : 'border-transparent text-slate-500 hover:text-slate-300'
+                                     }`}
+                                     title={isListening ? "Disengage Voice Transcription" : "Transcribe Voice Input"}
+                                   >
+                                     {isListening ? <MicOff size={14} /> : <Mic size={14} />}
+                                   </button>
+
+                                   {/* Voice Commands Hover Tooltip */}
+                                   <div className="absolute bottom-full right-0 mb-2 w-52 bg-slate-950/95 border border-slate-800 text-slate-300 rounded-xl p-3 text-[10px] font-mono shadow-xl opacity-0 scale-95 pointer-events-none group-hover/mic:opacity-100 group-hover/mic:scale-100 transition-all duration-200 z-50">
+                                     <div className="text-[9px] font-black uppercase text-indigo-400 tracking-wider mb-2 border-b border-slate-800/80 pb-1 flex items-center justify-between">
+                                       <span>Voice Protocols</span>
+                                       <span className="text-[8px] text-rose-400 animate-pulse">● Active</span>
+                                     </div>
+                                     <div className="space-y-1.5 text-slate-400">
+                                       <div className="flex justify-between items-center">
+                                         <span className="text-white font-bold">/matrix</span>
+                                         <span className="text-slate-500 text-[9px]">Toggle Matrix</span>
+                                       </div>
+                                       <div className="flex justify-between items-center">
+                                         <span className="text-white font-bold">/hack</span>
+                                         <span className="text-slate-500 text-[9px]">Run scan</span>
+                                       </div>
+                                       <div className="flex justify-between items-center">
+                                         <span className="text-white font-bold">/clear</span>
+                                         <span className="text-slate-500 text-[9px]">Flush logs</span>
+                                       </div>
+                                     </div>
+                                     <div className="mt-2 text-[8px] text-slate-500 border-t border-slate-800/50 pt-1.5 leading-relaxed text-center">
+                                       Speak command to execute protocol
+                                     </div>
+                                   </div>
+                                 </div>
+                                 <button 
+                                   type="button"
+                                   onClick={() => {
+                                     if (fileInputRef.current) fileInputRef.current.click();
+                                   }}
+                                   className={`p-1.5 rounded-lg border transition-all text-slate-500 border-transparent hover:text-slate-300`}
+                                   title="Encapsulate as Attachment"
+                                 >
+                                   <Paperclip size={14} />
+                                 </button>
+                               </div>
                                <input 
                                  type="file"
                                  ref={fileInputRef}
@@ -2402,6 +2852,25 @@ export default function App() {
                              <div className="flex gap-2">
                                <button 
                                  type="button"
+                                 onClick={() => {
+                                   setAutoEncrypt(!autoEncrypt);
+                                   playSynthSound('beep');
+                                   setSystemAlert(`AUTO-ENCRYPTION MODE: ${!autoEncrypt ? 'ACTIVATED' : 'BYPASSED'}`);
+                                 }}
+                                 className={`px-3 rounded-xl border transition-all flex items-center gap-1.5 ${
+                                   autoEncrypt 
+                                     ? 'bg-emerald-500/10 border-emerald-500/30 text-emerald-400 hover:bg-emerald-500/20' 
+                                     : 'bg-rose-500/10 border-rose-500/30 text-rose-400 hover:bg-rose-500/20'
+                                 }`}
+                                 title={autoEncrypt ? "Auto Encryption: Enabled" : "Auto Encryption: Disabled"}
+                               >
+                                 {autoEncrypt ? <Lock size={12} className="text-emerald-400" /> : <Unlock size={12} className="text-rose-400" />}
+                                 <span className="text-[8px] font-black uppercase tracking-wider hidden sm:inline">
+                                   {autoEncrypt ? 'SECURE' : 'BYPASS'}
+                                 </span>
+                               </button>
+                               <button 
+                                 type="button"
                                  onClick={() => setBurnMode(!burnMode)}
                                  className={`px-4 rounded-xl border transition-all flex items-center gap-2 ${burnMode ? 'bg-rose-500 border-rose-400 text-white' : 'bg-slate-900 border-slate-800 text-slate-500 hover:text-slate-300'}`}
                                  title="Self-Destruct Protocol"
@@ -2411,9 +2880,13 @@ export default function App() {
                                <button 
                                  type="submit"
                                  disabled={!inputMessage.trim()}
-                                 className="px-6 bg-indigo-600 hover:bg-indigo-500 text-white rounded-xl font-black text-[10px] uppercase tracking-widest transition-all disabled:opacity-50 disabled:hover:bg-indigo-600 shadow-lg shadow-indigo-600/20"
+                                 className={`px-6 rounded-xl font-black text-[10px] uppercase tracking-widest transition-all disabled:opacity-50 shadow-lg ${
+                                   autoEncrypt 
+                                     ? 'bg-indigo-600 hover:bg-indigo-500 text-white disabled:hover:bg-indigo-600 shadow-indigo-600/20' 
+                                     : 'bg-rose-600 hover:bg-rose-500 text-white disabled:hover:bg-rose-600 shadow-rose-600/20'
+                                 }`}
                                >
-                                 Broadcast
+                                 {autoEncrypt ? 'Broadcast' : 'Broadcast Plain'}
                                </button>
                              </div>
                           </div>
@@ -2469,14 +2942,8 @@ export default function App() {
                                 exit={{ opacity: 0, scale: 0.95, y: 10 }}
                                 className="z-50 w-64 bg-slate-950/95 border border-slate-800/90 rounded-2xl p-3 shadow-2xl shadow-black/90 space-y-2 select-none font-mono"
                               >
-                                <div className="flex items-center justify-between text-[7px] font-black tracking-widest text-slate-500 border-b border-slate-900 pb-2 uppercase">
-                                  <span className="flex items-center gap-1">
-                                    <Terminal size={8} className="text-indigo-400 animate-pulse" /> Secure Protocols
-                                  </span>
-                                  <span>7 Actions</span>
-                                </div>
-                                <div className="space-y-1 max-h-[220px] overflow-y-auto scrollbar-none pr-0.5">
-                                  {[
+                                {(() => {
+                                  const allActions = [
                                     { label: 'Arm Self-Destruct', cmd: '/burn', sub: 'Toggles burn on next broadcast', active: burnMode, icon: <Flame size={11} className={burnMode ? "text-rose-400 animate-pulse" : "text-slate-400"} /> },
                                     { label: 'Integrity Ping', cmd: '/ping', sub: 'Latency and secure relay test', icon: <Activity size={11} className="text-cyan-400" /> },
                                     { label: 'Clearance Status', cmd: '/whoami', sub: 'Agent clearance level & profiling', icon: <UserCircle size={11} className="text-amber-400" /> },
@@ -2484,42 +2951,117 @@ export default function App() {
                                     { label: 'Sniff Security Packet', cmd: '/challenge', sub: 'Deploy new decryption challenge', active: !!activeChallenge, icon: <Radio size={11} className={activeChallenge ? "text-emerald-400 animate-pulse" : "text-emerald-500"} /> },
                                     { label: 'Privilege Escalation', cmd: '/sudo', sub: 'Attempt superuser privilege mode', active: isSudoMode, icon: <Terminal size={11} className={isSudoMode ? "text-indigo-400 animate-pulse" : "text-indigo-500"} /> },
                                     { label: 'Digital Rain Theme', cmd: '/matrix', sub: 'Engage matrix simulation overlay', active: showMatrix, icon: <Binary size={11} className={showMatrix ? "text-green-400 animate-pulse" : "text-green-500"} /> },
-                                  ].map((act, index) => {
+                                  ];
+
+                                  const filteredActions = allActions.filter(act => {
+                                    if (!quickActionSearch) return true;
+                                    const query = quickActionSearch.toLowerCase().trim();
+                                    
+                                    // Custom sequential fuzzy-matching function
+                                    const fuzzyMatchString = (target: string) => {
+                                      const cleanTarget = target.toLowerCase();
+                                      let queryIdx = 0;
+                                      for (let i = 0; i < cleanTarget.length; i++) {
+                                        if (cleanTarget[i] === query[queryIdx]) {
+                                          queryIdx++;
+                                          if (queryIdx === query.length) return true;
+                                        }
+                                      }
+                                      return false;
+                                    };
+
                                     return (
-                                      <button
-                                        key={index}
-                                        id={`quick-action-${act.cmd.substring(1)}`}
-                                        type="button"
-                                        onClick={(e) => {
-                                          e.preventDefault();
-                                          e.stopPropagation();
-                                          processCommand(act.cmd);
-                                          setShowQuickActions(false);
-                                        }}
-                                        className={`w-full text-left flex items-start gap-2.5 px-2.5 py-1.5 rounded-xl transition-all border border-transparent ${
-                                          act.active 
-                                            ? 'bg-indigo-500/10 border-indigo-500/20 text-indigo-300' 
-                                            : 'hover:bg-slate-900/60 hover:border-slate-800/40 text-slate-300'
-                                        }`}
-                                      >
-                                        <div className="mt-0.5 shrink-0">
-                                          {act.icon}
-                                        </div>
-                                        <div className="flex-1 min-w-0">
-                                          <div className="flex items-center justify-between font-black text-[9px] tracking-tight">
-                                            <span className="uppercase">{act.label}</span>
-                                            <span className="text-[7.5px] font-bold text-slate-600 bg-slate-950 px-1 py-0.5 rounded border border-slate-900 font-mono leading-none">
-                                              {act.cmd}
-                                            </span>
-                                          </div>
-                                          <p className="text-[7px] text-slate-500 font-sans mt-0.5 leading-tight truncate">
-                                            {act.sub}
-                                          </p>
-                                        </div>
-                                      </button>
+                                      fuzzyMatchString(act.label) || 
+                                      fuzzyMatchString(act.cmd) || 
+                                      fuzzyMatchString(act.sub)
                                     );
-                                  })}
-                                </div>
+                                  });
+
+                                  return (
+                                    <>
+                                      <div className="flex items-center justify-between text-[7px] font-black tracking-widest text-slate-500 border-b border-slate-900 pb-2 uppercase">
+                                        <span className="flex items-center gap-1">
+                                          <Terminal size={8} className="text-indigo-400 animate-pulse" /> Secure Protocols
+                                        </span>
+                                        <span>{quickActionSearch ? `${filteredActions.length} of ${allActions.length} matched` : `${allActions.length} Actions`}</span>
+                                      </div>
+
+                                      {/* Styled Terminal Filter input */}
+                                      <div className="relative flex items-center bg-black/50 border border-slate-800/80 rounded-xl px-2.5 py-1.5 focus-within:border-indigo-500/50 transition-all">
+                                        <Search size={10} className="text-slate-500 mr-2 shrink-0" />
+                                        <input
+                                          type="text"
+                                          value={quickActionSearch}
+                                          onChange={(e) => setQuickActionSearch(e.target.value)}
+                                          placeholder="Fuzzy filter protocols... (e.g. 'burn')"
+                                          className="w-full bg-transparent text-[9px] text-white font-mono outline-none placeholder-slate-600"
+                                          onClick={(e) => e.stopPropagation()}
+                                          onKeyDown={(e) => e.stopPropagation()}
+                                        />
+                                        {quickActionSearch && (
+                                          <button
+                                            type="button"
+                                            onClick={(e) => {
+                                              e.preventDefault();
+                                              e.stopPropagation();
+                                              setQuickActionSearch('');
+                                            }}
+                                            className="text-slate-500 hover:text-slate-300 transition-colors shrink-0 pl-1"
+                                            title="Clear filter"
+                                          >
+                                            <X size={10} />
+                                          </button>
+                                        )}
+                                      </div>
+
+                                      <div className="space-y-1 max-h-[220px] overflow-y-auto scrollbar-none pr-0.5">
+                                        {filteredActions.length > 0 ? (
+                                          filteredActions.map((act, index) => {
+                                            return (
+                                              <button
+                                                key={index}
+                                                id={`quick-action-${act.cmd.substring(1)}`}
+                                                type="button"
+                                                onClick={(e) => {
+                                                  e.preventDefault();
+                                                  e.stopPropagation();
+                                                  processCommand(act.cmd);
+                                                  setShowQuickActions(false);
+                                                }}
+                                                className={`w-full text-left flex items-start gap-2.5 px-2.5 py-1.5 rounded-xl transition-all border border-transparent ${
+                                                  act.active 
+                                                    ? 'bg-indigo-500/10 border-indigo-500/20 text-indigo-300' 
+                                                    : 'hover:bg-slate-900/60 hover:border-slate-800/40 text-slate-300'
+                                                }`}
+                                              >
+                                                <div className="mt-0.5 shrink-0">
+                                                  {act.icon}
+                                                </div>
+                                                <div className="flex-1 min-w-0">
+                                                  <div className="flex items-center justify-between font-black text-[9px] tracking-tight">
+                                                    <span className="uppercase">{act.label}</span>
+                                                    <span className="text-[7.5px] font-bold text-slate-600 bg-slate-950 px-1 py-0.5 rounded border border-slate-900 font-mono leading-none">
+                                                      {act.cmd}
+                                                    </span>
+                                                  </div>
+                                                  <p className="text-[7px] text-slate-500 font-sans mt-0.5 leading-tight truncate">
+                                                    {act.sub}
+                                                  </p>
+                                                </div>
+                                              </button>
+                                            );
+                                          })
+                                        ) : (
+                                          <div className="py-5 px-3 text-center border border-dashed border-slate-800/60 rounded-xl bg-black/20">
+                                            <Terminal size={12} className="mx-auto text-rose-500/40 mb-1.5 animate-pulse" />
+                                            <p className="text-[8px] font-black uppercase text-rose-400/80 tracking-wider">Protocol Not Found</p>
+                                            <p className="text-[7px] text-slate-500 font-sans mt-0.5 leading-normal">No subnet match found for filtering constraint</p>
+                                          </div>
+                                        )}
+                                      </div>
+                                    </>
+                                  );
+                                })()}
                               </motion.div>
                             </>
                           )}
@@ -2554,334 +3096,330 @@ export default function App() {
                    initial={{ opacity: 0, x: 20 }}
                    animate={{ opacity: 1, x: 0 }}
                    exit={{ opacity: 0, x: -20 }}
-                   className="h-full flex gap-6 overflow-hidden w-full"
+                   className="h-full flex flex-col gap-6 lg:overflow-hidden overflow-y-auto w-full"
                  >
                                         {/* Lab Sub-navigation */}
-                    <div className="flex items-center justify-between border-b border-slate-800/80 pb-3 shrink-0 text-left w-full">
-                      <div className="flex gap-2">
-                        <button
-                          type="button"
-                          onClick={() => { setLabTab('decrypt'); playSynthSound('beep'); }}
-                          className={`px-3 py-1.5 text-[9px] uppercase font-black tracking-widest rounded-lg border transition-all flex items-center gap-1.5 font-mono ${
-                            labTab === 'decrypt' 
-                              ? 'bg-cyan-500/10 border-cyan-500/35 text-cyan-400' 
-                              : 'bg-transparent border-transparent text-slate-500 hover:text-slate-300'
-                          }`}
-                        >
-                          <Activity size={12} /> Decryptor & Analysis
-                        </button>
-                        <button
-                          type="button"
-                          onClick={() => { setLabTab('encode'); playSynthSound('beep'); }}
-                          className={`px-3 py-1.5 text-[9px] uppercase font-black tracking-widest rounded-lg border transition-all flex items-center gap-1.5 font-mono ${
-                            labTab === 'encode' 
-                              ? 'bg-indigo-500/10 border-indigo-500/35 text-indigo-400' 
-                              : 'bg-transparent border-transparent text-slate-500 hover:text-slate-300'
-                          }`}
-                        >
-                          <Lock size={12} /> Encoder Workspace
-                        </button>
-                        <button
-                          type="button"
-                          onClick={() => { setLabTab('square'); playSynthSound?.('beep'); }}
-                          className={`px-3 py-1.5 text-[9px] uppercase font-black tracking-widest rounded-lg border transition-all flex items-center gap-1.5 font-mono ${
-                            labTab === 'square' 
-                              ? 'bg-amber-500/10 border-amber-500/35 text-amber-400' 
-                              : 'bg-transparent border-transparent text-slate-500 hover:text-slate-300'
-                          }`}
-                        >
-                          <Hash size={12} /> Tabula Recta Visualizer
-                        </button>
-                        <button
-                          type="button"
-                          onClick={() => { setLabTab('terminal'); playSynthSound?.('beep'); }}
-                          className={`px-3 py-1.5 text-[9px] uppercase font-black tracking-widest rounded-lg border transition-all flex items-center gap-1.5 font-mono ${
-                            labTab === 'terminal' 
-                              ? 'bg-emerald-500/10 border-emerald-500/35 text-emerald-400' 
-                              : 'bg-transparent border-transparent text-slate-500 hover:text-slate-300'
-                          }`}
-                        >
-                          <Terminal size={12} /> Python Core Console
-                        </button>
+                    <div className="bg-slate-900 border border-slate-800 rounded-2xl p-4 flex flex-col md:flex-row items-stretch md:items-center justify-between gap-4 shrink-0">
+                      <div className="space-y-1">
+                        <h4 className="text-sm font-black uppercase text-indigo-400 font-mono flex items-center gap-1.5 leading-none">
+                          <Activity className="w-4 h-4 text-indigo-500 animate-pulse" /> Cryptanalysis Lab
+                        </h4>
+                        <p className="text-[9px] text-slate-500 uppercase tracking-widest font-mono">
+                          SIMPLIFIED SIGNAL DECIPHERING CHASSIS
+                        </p>
                       </div>
-                      <div className="text-[8px] font-mono text-slate-600 uppercase tracking-widest hidden sm:block">
-                        SYS.CRYPT_LAB // CORE_ENGINE_ONLINE
+
+                      {/* Cipher selection and parameters in a neat row */}
+                      <div className="flex flex-wrap items-center gap-4">
+                        <div className="flex flex-col gap-1">
+                          <label className="text-[8px] uppercase tracking-wider text-slate-500 font-bold block leading-none">Select Cipher Protocol</label>
+                          <select
+                            value={encodeCipherType}
+                            onChange={(e) => {
+                              setEncodeCipherType(e.target.value as CipherType);
+                              playSynthSound('beep');
+                            }}
+                            className="bg-black border border-slate-800 rounded-xl px-3 py-2 text-[10px] text-indigo-400 font-mono outline-none focus:border-indigo-500/50"
+                          >
+                            <option value={CipherType.HYBRID}>Hybrid_Vig_Cae.v2</option>
+                            <option value={CipherType.ATBASH}>Mirror_Atbash.idx</option>
+                            <option value={CipherType.REVERSE}>Rev_Seq_Buffer</option>
+                            <option value={CipherType.BASE64}>B64_Binary_Map</option>
+                            <option value={CipherType.MORSE}>Morse_Code_Pulse</option>
+                            <option value={CipherType.ROT13}>ROT13_Classic</option>
+                            <option value={CipherType.RAILFENCE}>Rail_Fence_ZigZag</option>
+                            <option value={CipherType.VIGENERE}>Vigenere_Standard</option>
+                            <option value={CipherType.CAESAR}>Caesar_Shift</option>
+                            <option value={CipherType.BACONIAN}>Baconian_Bicall</option>
+                          </select>
+                        </div>
+
+                        {/* Param: Vigenère key */}
+                        {(encodeCipherType === CipherType.VIGENERE || encodeCipherType === CipherType.HYBRID) && (
+                          <div className="flex flex-col gap-1 w-24">
+                            <label className="text-[8px] uppercase tracking-wider text-slate-500 font-bold block leading-none">Security Key</label>
+                            <input 
+                              type="text" 
+                              value={encodeKey}
+                              onChange={(e) => setEncodeKey(e.target.value.toUpperCase())}
+                              className="bg-black border border-slate-800 rounded-xl px-2.5 py-1.5 text-[10px] font-mono text-indigo-300 uppercase focus:border-indigo-500/55 outline-none font-bold"
+                              placeholder="KEY..."
+                            />
+                          </div>
+                        )}
+
+                        {/* Param: Caesar Shift */}
+                        {(encodeCipherType === CipherType.CAESAR || encodeCipherType === CipherType.HYBRID) && (
+                          <div className="flex flex-col gap-1 w-24">
+                            <div className="flex justify-between items-center text-[8px] uppercase tracking-wider text-slate-500 font-bold leading-none">
+                              <span>Shift</span>
+                              <span className="text-indigo-400 font-mono font-bold">{encodeShift}</span>
+                            </div>
+                            <input 
+                              type="range" min="0" max="94"
+                              value={encodeShift}
+                              onChange={(e) => setEncodeShift(parseInt(e.target.value))}
+                              className="w-full accent-indigo-500 h-1 bg-slate-855 rounded-full appearance-none cursor-pointer mt-1"
+                            />
+                          </div>
+                        )}
+
+                        {/* Param: Railfence rails */}
+                        {encodeCipherType === CipherType.RAILFENCE && (
+                          <div className="flex flex-col gap-1 w-24">
+                            <div className="flex justify-between items-center text-[8px] uppercase tracking-wider text-slate-500 font-bold leading-none">
+                              <span>Rails</span>
+                              <span className="text-indigo-400 font-mono font-bold">{encodeRails}</span>
+                            </div>
+                            <input 
+                              type="range" min="2" max="10"
+                              value={encodeRails}
+                              onChange={(e) => setEncodeRails(parseInt(e.target.value))}
+                              className="w-full accent-indigo-500 h-1 bg-slate-855 rounded-full appearance-none cursor-pointer mt-1"
+                            />
+                          </div>
+                        )}
                       </div>
                     </div>
 
-                    {/* Sub-tab content view */}
-                    {labTab === 'decrypt' ? (
-                      <div className="flex-1 grid grid-cols-2 gap-6 overflow-hidden text-left w-full">
-                        <AnalysisTool title="Active Scraper" icon={<Activity size={14} />} color="cyan">
-                          <div className="flex flex-col h-full gap-4 overflow-y-auto pr-1">
-                            <textarea 
-                              value={scratchpad}
-                              onChange={(e) => setScratchpad(e.target.value)}
-                              placeholder="PASTE_CIPHERTEXT_FOR_EXTRACTION..."
-                              className="flex-1 min-h-[140px] w-full bg-black/40 border border-slate-800 rounded-xl p-4 text-[10px] font-mono text-cyan-300 outline-none focus:border-cyan-500/50 resize-none transition-all placeholder:text-slate-700"
-                            />
-                            
-                            {/* Live Decryption Box */}
-                            {scratchpad.trim() && (
-                              <div className="p-3 bg-slate-950/60 border border-slate-800/80 rounded-xl space-y-2 shrink-0">
-                                <div className="flex items-center justify-between text-[8px] font-mono font-black uppercase tracking-widest text-slate-500">
-                                  <span>DECIPHER PREVIEW ({activeCipherType})</span>
-                                  <span className="text-cyan-400">
-                                    {activeCipherType === CipherType.RAILFENCE 
-                                      ? `RAILS: ${encodeRails}` 
-                                      : `SHIFT: ${caesarShift} / KEY: ${vigenereKey}`}
-                                  </span>
-                                </div>
-                                <div className="text-[10px] font-mono text-slate-200 select-all whitespace-pre-wrap max-h-24 overflow-y-auto border border-slate-800/30 p-2.5 rounded bg-black/30">
-                                  {getDecodedScratchpad()}
-                                </div>
-                                <div className="flex justify-between items-center text-[7.5px] uppercase font-mono text-slate-500">
-                                  <span>Length: {scratchpad.length} Chars</span>
-                                  <button 
-                                    type="button"
-                                    onClick={() => {
-                                      navigator.clipboard.writeText(getDecodedScratchpad());
-                                      playSynthSound('success');
-                                      setSystemAlert("DECRYPTED TEXT EXPORTED CONSOLE-WIDE.");
-                                    }}
-                                    className="text-cyan-400 hover:text-cyan-300 font-bold transition-all flex items-center gap-1 bg-cyan-500/5 border border-cyan-500/15 px-1.5 py-0.5 rounded animate-pulse"
-                                  >
-                                    <Copy size={9} /> Copy Deciphered
-                                  </button>
-                                </div>
-                              </div>
-                            )}
+                    {/* Left/Right Twin Panel Workspace */}
+                    <div className="flex-1 grid grid-cols-1 lg:grid-cols-2 gap-4 overflow-hidden min-h-0">
+                      
+                      {/* ENCODE WORKSPACE PANEL */}
+                      <div className="bg-slate-900/40 border border-slate-800 rounded-2xl p-4 flex flex-col h-[550px] lg:h-full overflow-hidden">
+                        <div className="flex items-center gap-2 border-b border-slate-800/60 pb-3 mb-3 shrink-0">
+                          <Lock className="w-3.5 h-3.5 text-indigo-400" />
+                          <h5 className="text-[10px] font-black uppercase text-indigo-400 font-mono tracking-widest leading-none">1. Encoder Workspace</h5>
+                        </div>
 
-                            <div className="flex gap-2">
-                              <button 
-                                type="button"
-                                onClick={handleEntropyAudit}
-                                className="flex-1 py-3 bg-cyan-600 hover:bg-cyan-500 text-white rounded-xl text-[9px] font-black uppercase tracking-widest transition-all shadow-lg shadow-cyan-600/20"
-                              >
-                                Entropy Audit
-                              </button>
-                              <button 
-                                type="button"
-                                onClick={handleClearBuffer}
-                                className="flex-1 py-3 border border-slate-800 text-slate-500 rounded-xl text-[9px] font-black uppercase tracking-widest hover:bg-slate-800 hover:text-slate-300 transition-all font-mono"
-                              >
-                                Clear Buffer
-                              </button>
-                            </div>
-                          </div>
-                        </AnalysisTool>
-
-                        <AnalysisTool title="Spectral Density" icon={<BarChart3 size={14} />} color="emerald">
-                          <FrequencyAnalyzer text={scratchpad} />
-                        </AnalysisTool>
-                      </div>
-                    ) : labTab === 'encode' ? (
-                      <div className="flex-1 grid grid-cols-2 gap-6 overflow-hidden text-left w-full">
-                        <AnalysisTool title="Plaintext Input" icon={<FileText size={14} />} color="indigo">
-                          <div className="flex flex-col h-full gap-4 overflow-y-auto pr-1">
+                        {/* Inputs/outputs container */}
+                        <div className="flex-1 flex flex-col gap-3 min-h-0 overflow-hidden">
+                          <div className="flex-1 flex flex-col min-h-0">
+                            <label className="text-[8px] font-bold uppercase text-slate-500 mb-1.5 block shrink-0">Encode Text (Plaintext Input)</label>
                             <textarea 
                               value={encodePlaintext}
-                              onChange={(e) => setEncodePlaintext(e.target.value)}
-                              placeholder="ENTER_SENSITIVE_PLAINTEXT_DATA_FOR_ENCODING..."
-                              className="flex-1 min-h-[120px] w-full bg-black/40 border border-slate-800 rounded-xl p-4 text-[10px] font-mono text-zinc-300 outline-none focus:border-indigo-500/55 resize-none transition-all placeholder:text-slate-700"
+                              onChange={(e) => {
+                                setEncodePlaintext(e.target.value);
+                                setEncodeCopied(false);
+                              }}
+                              placeholder="Type original text here to encode..."
+                              className="flex-1 w-full bg-black/40 border border-slate-800/80 rounded-xl p-3 text-xs font-mono text-zinc-300 outline-none focus:border-indigo-500/50 resize-none transition-all placeholder:text-slate-700 font-medium"
                             />
+                          </div>
 
-                            {/* Encoding settings */}
-                            <div className="grid grid-cols-2 gap-4 bg-slate-950/40 p-4 border border-slate-800 rounded-xl text-left shrink-0">
-                              <div className="space-y-1.5">
-                                <label className="text-[8px] uppercase tracking-wider text-slate-500 font-bold block">Protocol Cipher</label>
-                                <select
-                                  value={encodeCipherType}
+                          <div className="flex-1 flex flex-col min-h-0">
+                            <label className="text-[8px] font-bold uppercase text-slate-500 mb-1.5 block shrink-0">Encoded Version (Result Output)</label>
+                            <div className="flex-1 w-full bg-indigo-950/20 border border-indigo-500/10 rounded-xl p-3 font-mono text-xs text-indigo-300 break-all overflow-y-auto relative select-all border-dashed font-bold">
+                              {encodePlaintext ? (
+                                encodeCipherType === CipherType.RAILFENCE 
+                                  ? Cipher.railfence(encodePlaintext, encodeRails, false)
+                                  : Cipher.encrypt(encodePlaintext, encodeKey, encodeShift, encodeCipherType)
+                              ) : (
+                                <span className="text-slate-700 italic font-black text-[9px] tracking-widest block text-center mt-6 uppercase font-sans">
+                                  Awaiting Plaintext Buffer Injection...
+                                </span>
+                              )}
+                            </div>
+                          </div>
+                        </div>
+
+                        <button 
+                          type="button"
+                          disabled={!encodePlaintext}
+                          onClick={() => {
+                            const res = encodeCipherType === CipherType.RAILFENCE 
+                              ? Cipher.railfence(encodePlaintext, encodeRails, false)
+                              : Cipher.encrypt(encodePlaintext, encodeKey, encodeShift, encodeCipherType);
+                            navigator.clipboard.writeText(res);
+                            playSynthSound('success');
+                            setEncodeCopied(true);
+                            setTimeout(() => setEncodeCopied(false), 1500);
+                          }}
+                          className="w-full py-3 mt-3 bg-indigo-600 hover:bg-indigo-500 disabled:opacity-40 disabled:hover:bg-indigo-600 text-white rounded-xl text-[9px] font-black uppercase tracking-[0.2em] transition-all shadow-lg shadow-indigo-600/20 flex items-center justify-center gap-1.5 shrink-0"
+                        >
+                          <Copy size={11} /> {encodeCopied ? 'Copied to Clipboard!' : 'Copy Encoded Version'}
+                        </button>
+                      </div>
+
+                      {/* DECODE WORKSPACE PANEL */}
+                      <div className="bg-slate-900/40 border border-slate-800 rounded-2xl p-4 flex flex-col h-[550px] lg:h-full overflow-hidden">
+                        <div className="flex items-center justify-between border-b border-slate-800/60 pb-3 mb-3 shrink-0">
+                          <div className="flex items-center gap-2">
+                            <Unlock className="w-3.5 h-3.5 text-cyan-400" />
+                            <h5 className="text-[10px] font-black uppercase text-cyan-400 font-mono tracking-widest leading-none">2. Decoder Workspace</h5>
+                          </div>
+                          
+                          {/* Tab Selection */}
+                          <div className="flex bg-black/40 border border-slate-800/65 rounded-lg p-0.5">
+                            <button
+                              type="button"
+                              onClick={() => {
+                                setDecodeMode('single');
+                                playSynthSound('beep');
+                              }}
+                              className={`px-2 py-1 rounded text-[8px] font-black uppercase tracking-wider transition-all ${
+                                decodeMode === 'single'
+                                  ? 'bg-cyan-500/10 text-cyan-400 border border-cyan-500/20'
+                                  : 'text-slate-500 hover:text-slate-400 border border-transparent'
+                              }`}
+                            >
+                              Single
+                            </button>
+                            <button
+                              type="button"
+                              onClick={() => {
+                                setDecodeMode('batch');
+                                playSynthSound('beep');
+                              }}
+                              className={`px-2 py-1 rounded text-[8px] font-black uppercase tracking-wider transition-all ${
+                                decodeMode === 'batch'
+                                  ? 'bg-cyan-500/10 text-cyan-400 border border-cyan-500/20'
+                                  : 'text-slate-500 hover:text-slate-400 border border-transparent'
+                              }`}
+                            >
+                              Batch
+                            </button>
+                          </div>
+                        </div>
+
+                        {/* Inputs/outputs container */}
+                        <div className="flex-1 flex flex-col gap-3 min-h-0 overflow-hidden">
+                          {decodeMode === 'single' ? (
+                            <>
+                              <div className="flex-1 flex flex-col min-h-0">
+                                <label className="text-[8px] font-bold uppercase text-slate-500 mb-1.5 block shrink-0">Decode Text (Encoded Input)</label>
+                                <textarea 
+                                  value={scratchpad}
                                   onChange={(e) => {
-                                    setEncodeCipherType(e.target.value as CipherType);
-                                    playSynthSound('beep');
+                                    setScratchpad(e.target.value);
+                                    setDecodeCopied(false);
                                   }}
-                                  className="w-full bg-black/80 border border-slate-800 rounded-lg px-2.5 py-1.5 text-[10px] text-indigo-400 font-mono outline-none focus:border-indigo-500/50"
-                                >
-                                  <option value={CipherType.HYBRID}>Hybrid_Vig_Cae.v2</option>
-                                  <option value={CipherType.ATBASH}>Mirror_Atbash.idx</option>
-                                  <option value={CipherType.REVERSE}>Rev_Seq_Buffer</option>
-                                  <option value={CipherType.BASE64}>B64_Binary_Map</option>
-                                  <option value={CipherType.MORSE}>Morse_Code_Pulse</option>
-                                  <option value={CipherType.ROT13}>ROT13_Classic</option>
-                                  <option value={CipherType.RAILFENCE}>Rail_Fence_ZigZag</option>
-                                  <option value={CipherType.VIGENERE}>Vigenere_Standard</option>
-                                  <option value={CipherType.CAESAR}>Caesar_Shift</option>
-                                  <option value={CipherType.BACONIAN}>Baconian_Bicall</option>
-                                </select>
+                                  placeholder="Enter encoded text here to decode..."
+                                  className="flex-1 w-full bg-black/40 border border-slate-800/80 rounded-xl p-3 text-xs font-mono text-cyan-300 outline-none focus:border-cyan-500/50 resize-none transition-all placeholder:text-slate-700 font-medium"
+                                />
                               </div>
 
-                              {/* Dynamic Parameter selectors */}
-                              {(encodeCipherType === CipherType.CAESAR || encodeCipherType === CipherType.HYBRID) && (
-                                <div className="space-y-1">
-                                  <div className="flex justify-between items-center text-[8px] uppercase tracking-wider text-slate-500 font-bold">
-                                    <span>Caesar Shift</span>
-                                    <span className="text-indigo-400 font-mono bg-indigo-500/5 px-1 rounded">{encodeShift}</span>
-                                  </div>
-                                  <input 
-                                    type="range" min="0" max="94"
-                                    value={encodeShift}
-                                    onChange={(e) => setEncodeShift(parseInt(e.target.value))}
-                                    className="w-full accent-indigo-500 h-1 bg-slate-800 rounded-full appearance-none cursor-pointer mt-2"
-                                  />
+                              <div className="flex-1 flex flex-col min-h-0">
+                                <label className="text-[8px] font-bold uppercase text-slate-500 mb-1.5 block shrink-0">Decoded Version (Result Output)</label>
+                                <div className="flex-1 w-full bg-cyan-950/20 border border-cyan-500/10 rounded-xl p-3 font-mono text-xs text-cyan-300 break-all overflow-y-auto relative select-all border-dashed font-bold">
+                                  {scratchpad ? (
+                                    encodeCipherType === CipherType.RAILFENCE 
+                                      ? Cipher.railfence(scratchpad, encodeRails, true)
+                                      : Cipher.decrypt(scratchpad, encodeKey, encodeShift, encodeCipherType)
+                                  ) : (
+                                    <span className="text-slate-700 italic font-black text-[9px] tracking-widest block text-center mt-6 uppercase font-sans">
+                                      Awaiting Ciphertext Buffer Injection...
+                                    </span>
+                                  )}
                                 </div>
-                              )}
-
-                              {(encodeCipherType === CipherType.VIGENERE || encodeCipherType === CipherType.HYBRID) && (
-                                <div className="space-y-1.5">
-                                  <label className="text-[8px] uppercase tracking-wider text-slate-500 font-bold block">Vigenère Key</label>
-                                  <input 
-                                    type="text" 
-                                    value={encodeKey}
-                                    onChange={(e) => setEncodeKey(e.target.value.toUpperCase())}
-                                    className="w-full bg-black/80 border border-slate-800 rounded-lg px-2.5 py-1 text-[10px] font-mono text-indigo-300 uppercase focus:border-indigo-500/55 outline-none font-bold block"
-                                    placeholder="KEYWORD..."
-                                  />
-                                  {(() => {
-                                    const strObj = getVigenereKeyStrength(encodeKey);
-                                    return (
-                                      <div className="space-y-1 mt-1">
-                                        <div className="h-1 w-full bg-slate-950 rounded-full overflow-hidden">
-                                          <div 
-                                            className={`h-full transition-all duration-300 ${strObj.color}`} 
-                                            style={{ width: strObj.width }}
-                                          />
-                                        </div>
-                                        <div className="flex justify-between items-center text-[7px] font-mono font-black tracking-widest px-0.5">
-                                          <span className="text-slate-500">STRENGTH</span>
-                                          <span className={strObj.text}>{strObj.label}</span>
-                                        </div>
-                                      </div>
-                                    );
-                                  })()}
-                                </div>
-                              )}
-
-                              {encodeCipherType === CipherType.RAILFENCE && (
-                                <div className="space-y-1">
-                                  <div className="flex justify-between items-center text-[8px] uppercase tracking-wider text-slate-500 font-bold">
-                                    <span>Rails count</span>
-                                    <span className="text-indigo-400 font-mono bg-indigo-500/5 px-1 rounded">{encodeRails}</span>
-                                  </div>
-                                  <input 
-                                    type="range" min="2" max="10"
-                                    value={encodeRails}
-                                    onChange={(e) => setEncodeRails(parseInt(e.target.value))}
-                                    className="w-full accent-indigo-500 h-1 bg-slate-800 rounded-full appearance-none cursor-pointer mt-2"
-                                  />
-                                </div>
-                              )}
-
-                              {![CipherType.CAESAR, CipherType.HYBRID, CipherType.VIGENERE, CipherType.RAILFENCE].includes(encodeCipherType) && (
-                                <div className="flex items-center justify-center p-1 font-mono text-[7px] uppercase tracking-widest text-slate-600 leading-tight">
-                                  UNPARAMETRIZED STATIC CIPHER CHASSIS
-                                </div>
-                              )}
-                            </div>
-
-                            <div className="flex gap-2">
-                              <button 
-                                type="button"
-                                onClick={() => {
-                                  setEncodePlaintext('');
-                                  playSynthSound('beep');
-                                  setSystemAlert("PLAINTEXT BUFFER RESET.");
-                                }}
-                                className="flex-1 py-3 border border-slate-800 text-slate-500 rounded-xl text-[9px] font-black uppercase tracking-widest hover:bg-slate-800 hover:text-slate-300 transition-all font-mono"
-                              >
-                                Reset Text
-                              </button>
-                            </div>
-                          </div>
-                        </AnalysisTool>
-
-                        <AnalysisTool title="Generated Ciphertext" icon={<Binary size={14} />} color="violet">
-                          <div className="flex flex-col h-full gap-4 overflow-y-auto pr-1">
-                            <div className="flex-1 min-h-[140px] bg-black/40 border border-slate-800 rounded-xl p-4 flex flex-col justify-between overflow-hidden relative text-left">
-                              {encodePlaintext.trim() && (
-                                <div className="absolute inset-0 bg-indigo-500/[0.01] pointer-events-none" />
-                              )}
-                              
-                              <div className="flex-1 overflow-y-auto font-mono text-[10px] text-violet-300 break-all whitespace-pre-wrap select-all text-left">
-                                {getEncodedOutput() ? (
-                                  <TypingDecoderText text={getEncodedOutput()} className="text-violet-300 font-bold" />
-                                ) : (
-                                  <span className="text-slate-700 italic uppercase font-black text-[9px] tracking-widest block text-center mt-12 animate-pulse font-sans">
-                                    Awaiting raw plaintext buffer injection...
-                                  </span>
-                                )}
+                              </div>
+                            </>
+                          ) : (
+                            <>
+                              <div className="flex-1 flex flex-col min-h-0">
+                                <label className="text-[8px] font-bold uppercase text-slate-500 mb-1.5 block shrink-0">Batch Ciphertext (One line per ciphertext)</label>
+                                <textarea 
+                                  value={batchScratchpad}
+                                  onChange={(e) => {
+                                    setBatchScratchpad(e.target.value);
+                                    setDecodeCopied(false);
+                                  }}
+                                  placeholder="Paste multiple lines of ciphertext here...&#10;Line 1: ciphertext&#10;Line 2: ciphertext"
+                                  className="flex-1 w-full bg-black/40 border border-slate-800/80 rounded-xl p-3 text-xs font-mono text-cyan-300 outline-none focus:border-cyan-500/50 resize-none transition-all placeholder:text-slate-750 font-medium"
+                                />
                               </div>
 
-                              {encodePlaintext.trim() && (
-                                <div className="border-t border-slate-800/80 pt-3 mt-3 grid grid-cols-3 gap-2 text-[7px] uppercase font-mono text-slate-500 shrink-0 text-left">
-                                  <div className="bg-slate-950/80 p-1.5 border border-slate-800/40 rounded flex flex-col">
-                                    <span>Raw Size</span>
-                                    <span className="text-indigo-400 font-bold">{new Blob([getEncodedOutput()]).size} Bytes</span>
-                                  </div>
-                                  <div className="bg-slate-950/80 p-1.5 border border-slate-800/40 rounded flex flex-col">
-                                    <span>Entropy</span>
-                                    <span className="text-indigo-400 font-bold">{calculateEntropy(getEncodedOutput()).toFixed(3)}</span>
-                                  </div>
-                                  <div className="bg-slate-950/80 p-1.5 border border-slate-800/40 rounded flex flex-col">
-                                    <span>Chassis</span>
-                                    <span className="text-indigo-400 font-bold truncate">{encodeCipherType}</span>
-                                  </div>
+                              <div className="flex-1 flex flex-col min-h-0">
+                                <label className="text-[8px] font-bold uppercase text-slate-500 mb-1.5 block shrink-0">Batch Decoded Output</label>
+                                <div className="flex-1 w-full bg-cyan-950/20 border border-cyan-500/10 rounded-xl p-2 font-mono text-xs text-cyan-300 overflow-y-auto border-dashed flex flex-col gap-1.5">
+                                  {batchScratchpad ? (
+                                    batchScratchpad.split('\n').map((line, idx) => {
+                                      const decrypted = line === '' ? '' : (
+                                        encodeCipherType === CipherType.RAILFENCE 
+                                          ? Cipher.railfence(line, encodeRails, true)
+                                          : Cipher.decrypt(line, encodeKey, encodeShift, encodeCipherType)
+                                      );
+                                      return (
+                                        <div key={idx} className="flex gap-2 items-center bg-black/40 border border-slate-800/50 rounded-lg p-2 hover:border-cyan-500/25 transition-all">
+                                          <div className="text-[8px] font-black uppercase text-indigo-400 bg-indigo-500/5 border border-indigo-500/10 px-1 py-0.5 rounded shrink-0 leading-none">
+                                            L{idx + 1}
+                                          </div>
+                                          <div className="flex-1 min-w-0 flex flex-col gap-1">
+                                            <div className="text-[8px] text-slate-500 truncate select-all" title="Original Ciphertext">
+                                              CIPHER: {line || <span className="italic text-slate-700">[EMPTY]</span>}
+                                            </div>
+                                            <div className="text-[10px] text-cyan-300 font-bold break-all select-all">
+                                              PLAIN: {decrypted || <span className="italic opacity-30">[EMPTY]</span>}
+                                            </div>
+                                          </div>
+                                          {decrypted && (
+                                            <button
+                                              type="button"
+                                              onClick={() => {
+                                                navigator.clipboard.writeText(decrypted);
+                                                playSynthSound('success');
+                                              }}
+                                              className="text-slate-500 hover:text-cyan-400 transition-all p-1 hover:bg-slate-800/40 rounded"
+                                              title="Copy decrypted line"
+                                            >
+                                              <Copy size={11} />
+                                            </button>
+                                          )}
+                                        </div>
+                                      );
+                                    })
+                                  ) : (
+                                    <span className="text-slate-700 italic font-black text-[9px] tracking-widest block text-center mt-6 uppercase font-sans">
+                                      Awaiting Batch Ciphertext...
+                                    </span>
+                                  )}
                                 </div>
-                              )}
-                            </div>
+                              </div>
+                            </>
+                          )}
+                        </div>
 
-                            <div className="grid grid-cols-3 gap-2 shrink-0 font-sans">
-                              <button 
-                                type="button"
-                                disabled={!encodePlaintext.trim()}
-                                onClick={() => {
-                                  navigator.clipboard.writeText(getEncodedOutput());
-                                  playSynthSound('success');
-                                  setSystemAlert("CIPHERCODE PERSISTED TO SYSTEM CLIPBOARD.");
-                                }}
-                                className="py-3 bg-indigo-600 hover:bg-indigo-500 disabled:opacity-40 disabled:hover:bg-indigo-600 text-white rounded-xl text-[9px] font-black uppercase tracking-widest transition-all shadow-lg shadow-indigo-600/25 flex items-center justify-center gap-1"
-                              >
-                                <Copy size={11} /> Copy Cipher
-                              </button>
-                              <button 
-                                type="button"
-                                disabled={!encodePlaintext.trim()}
-                                onClick={() => {
-                                  setScratchpad(getEncodedOutput());
-                                  setLabTab('decrypt');
-                                  playSynthSound('radar');
-                                  setSystemAlert("CIPHERTEXT TRANSFERRED TO ACTIVE LAB SCRAPER.");
-                                }}
-                                className="py-3 bg-slate-900 border border-slate-800 text-slate-300 disabled:opacity-40 hover:bg-slate-800 rounded-xl text-[9px] font-black uppercase tracking-widest transition-all flex items-center justify-center gap-1"
-                              >
-                                <FlaskConical size={11} /> Analyze
-                              </button>
-                              <button 
-                                type="button"
-                                disabled={!encodePlaintext.trim()}
-                                onClick={() => {
-                                  setInputMessage(getEncodedOutput());
-                                  setActiveTab('chat');
-                                  playSynthSound('success');
-                                  setSystemAlert("CIPHERED DRAFT COMMITTED TO MAIN ROUTER.");
-                                }}
-                                className="py-3 bg-indigo-950/40 border border-indigo-500/20 text-indigo-300 disabled:opacity-40 hover:bg-indigo-950/80 rounded-xl text-[9px] font-black uppercase tracking-widest transition-all flex items-center justify-center gap-1"
-                              >
-                                <Send size={11} /> Shell Draft
-                              </button>
-                            </div>
-                          </div>
-                        </AnalysisTool>
+                        {decodeMode === 'single' ? (
+                          <button 
+                            type="button"
+                            disabled={!scratchpad}
+                            onClick={() => {
+                              const res = encodeCipherType === CipherType.RAILFENCE 
+                                ? Cipher.railfence(scratchpad, encodeRails, true)
+                                : Cipher.decrypt(scratchpad, encodeKey, encodeShift, encodeCipherType);
+                              navigator.clipboard.writeText(res);
+                              playSynthSound('success');
+                              setDecodeCopied(true);
+                              setTimeout(() => setDecodeCopied(false), 1500);
+                            }}
+                            className="w-full py-3 mt-3 bg-cyan-600 hover:bg-cyan-500 disabled:opacity-40 disabled:hover:bg-cyan-600 text-white rounded-xl text-[9px] font-black uppercase tracking-[0.2em] transition-all shadow-lg shadow-cyan-600/20 flex items-center justify-center gap-1.5 shrink-0"
+                          >
+                            <Copy size={11} /> {decodeCopied ? 'Copied to Clipboard!' : 'Copy Decoded Version'}
+                          </button>
+                        ) : (
+                          <button 
+                            type="button"
+                            disabled={!batchScratchpad}
+                            onClick={() => {
+                              const decryptedJoined = batchScratchpad.split('\n').map(line => {
+                                if (line === '') return '';
+                                return encodeCipherType === CipherType.RAILFENCE 
+                                  ? Cipher.railfence(line, encodeRails, true)
+                                  : Cipher.decrypt(line, encodeKey, encodeShift, encodeCipherType);
+                              }).join('\n');
+                              navigator.clipboard.writeText(decryptedJoined);
+                              playSynthSound('success');
+                              setDecodeCopied(true);
+                              setTimeout(() => setDecodeCopied(false), 1500);
+                            }}
+                            className="w-full py-3 mt-3 bg-cyan-600 hover:bg-cyan-500 disabled:opacity-40 disabled:hover:bg-cyan-600 text-white rounded-xl text-[9px] font-black uppercase tracking-[0.2em] transition-all shadow-lg shadow-cyan-600/20 flex items-center justify-center gap-1.5 shrink-0"
+                          >
+                            <Copy size={11} /> {decodeCopied ? 'All Decrypted Copied!' : 'Copy All Decrypted (Newline Joined)'}
+                          </button>
+                        )}
                       </div>
-                    ) : labTab === 'square' ? (
-                      <div className="flex-1 overflow-hidden text-left w-full">
-                        <VigenereSquare initialKey={vigenereKey} playSynthSound={playSynthSound} />
-                      </div>
-                    ) : (
-                      <div className="flex-1 overflow-hidden text-left w-full">
-                        <PythonTerminal playSynthSound={playSynthSound} />
-                      </div>
-                    )}
+
+                    </div>
                  </motion.div>
                )}
             </AnimatePresence>
@@ -3193,7 +3731,7 @@ export default function App() {
             <div className="flex justify-between items-center border-b border-slate-800 pb-4">
               <h3 className="text-xs font-semibold text-slate-500 uppercase tracking-widest italic">Identity Dossier</h3>
               <button 
-                onClick={() => setShowProfileModal(true)} 
+                onClick={openProfileModal} 
                 className="text-[10px] text-indigo-400 font-bold uppercase hover:text-indigo-300 transition-colors"
               >
                 Sync Profile
@@ -3284,7 +3822,7 @@ export default function App() {
                initial={{ opacity: 0, y: 20 }}
                animate={{ opacity: 1, y: 0 }}
                exit={{ opacity: 0, y: 20 }}
-               className="max-w-md w-full bg-slate-900 border border-slate-800 rounded-3xl p-8 space-y-6 shadow-2xl overflow-y-auto max-h-[90vh]"
+               className="max-w-xl w-full bg-slate-900 border border-slate-800 rounded-3xl p-8 space-y-6 shadow-2xl overflow-y-auto max-h-[90vh]"
             >
               <div className="text-center">
                 <h3 className="text-lg font-black uppercase tracking-wider text-white italic">Identity Architecture</h3>
@@ -3296,8 +3834,8 @@ export default function App() {
                    <label className="text-[9px] font-black uppercase text-slate-500 block mb-2">Agent Codename</label>
                    <input 
                     type="text" 
-                    value={profile.codename}
-                    onChange={(e) => setProfile({ ...profile, codename: e.target.value })}
+                    value={draftProfile.codename}
+                    onChange={(e) => setDraftProfile({ ...draftProfile, codename: e.target.value })}
                     className="w-full bg-black/40 border border-slate-800 rounded-xl px-4 py-3 text-xs outline-none focus:border-indigo-500 text-white font-mono"
                    />
                 </div>
@@ -3308,8 +3846,12 @@ export default function App() {
                      {AVATAR_OPTIONS.map(opt => (
                        <button 
                         key={opt.id}
-                        onClick={() => setProfile({ ...profile, avatar: opt.id, customAvatar: undefined })}
-                        className={`h-10 rounded-xl flex items-center justify-center transition-all border ${profile.avatar === opt.id && !profile.customAvatar ? 'bg-indigo-600 text-white border-indigo-400 shadow-lg' : 'bg-slate-800 text-slate-500 border-slate-700 hover:border-slate-500'}`}
+                        type="button"
+                        onClick={() => {
+                          playSynthSound?.('beep');
+                          setDraftProfile(p => ({ ...p, avatar: opt.id, customAvatar: undefined }));
+                        }}
+                        className={`h-10 rounded-xl flex items-center justify-center transition-all border ${draftProfile.avatar === opt.id && !draftProfile.customAvatar ? 'bg-indigo-600 text-white border-indigo-400 shadow-lg' : 'bg-slate-800 text-slate-500 border-slate-700 hover:border-slate-500'}`}
                        >
                          {opt.icon}
                        </button>
@@ -3318,8 +3860,8 @@ export default function App() {
                    
                    <div className="flex items-center gap-4">
                       <div className="w-12 h-12 rounded-xl bg-black border border-slate-800 flex items-center justify-center overflow-hidden shrink-0">
-                        {profile.customAvatar ? (
-                          <img src={profile.customAvatar} className="w-full h-full object-cover" />
+                        {draftProfile.customAvatar ? (
+                          <img src={draftProfile.customAvatar} className="w-full h-full object-cover" />
                         ) : (
                           <UserCircle size={20} className="text-slate-700" />
                         )}
@@ -3335,7 +3877,7 @@ export default function App() {
                             if (file) {
                               const reader = new FileReader();
                               reader.onloadend = () => {
-                                setProfile({ ...profile, customAvatar: reader.result as string });
+                                setDraftProfile(p => ({ ...p, customAvatar: reader.result as string }));
                               };
                               reader.readAsDataURL(file);
                             }
@@ -3351,8 +3893,12 @@ export default function App() {
                      {COLOR_OPTIONS.map(opt => (
                        <button 
                         key={opt.id}
-                        onClick={() => setProfile({ ...profile, color: opt.id, customColor: undefined })}
-                        className={`w-8 h-8 rounded-full transition-all border-2 ${opt.bgClass} ${(profile.color === opt.id && !profile.customColor) ? 'border-white scale-110 shadow-lg ring-2 ring-indigo-500/20' : 'border-transparent opacity-50 hover:opacity-100'}`}
+                        type="button"
+                        onClick={() => {
+                          playSynthSound?.('beep');
+                          setDraftProfile(p => ({ ...p, color: opt.id, customColor: undefined }));
+                        }}
+                        className={`w-8 h-8 rounded-full transition-all border-2 ${opt.bgClass} ${(draftProfile.color === opt.id && !draftProfile.customColor) ? 'border-white scale-110 shadow-lg ring-2 ring-indigo-500/20' : 'border-transparent opacity-50 hover:opacity-100'}`}
                        />
                      ))}
                    </div>
@@ -3360,8 +3906,8 @@ export default function App() {
                    <div className="flex items-center gap-4">
                      <input 
                         type="color" 
-                        value={profile.customColor || '#6366f1'}
-                        onChange={(e) => setProfile({ ...profile, customColor: e.target.value })}
+                        value={draftProfile.customColor || '#6366f1'}
+                        onChange={(e) => setDraftProfile(p => ({ ...p, customColor: e.target.value }))}
                         className="w-10 h-10 bg-transparent border-0 cursor-pointer p-0"
                      />
                      <span className="text-[10px] text-slate-500 uppercase font-black">Custom Chromatic Variable</span>
@@ -3378,14 +3924,132 @@ export default function App() {
                      ].map(s => (
                        <button 
                          key={s.id}
-                         onClick={() => setUserStatus(s.id as any)}
-                         className={`flex-1 flex items-center justify-center gap-2 py-3 rounded-xl border transition-all text-[9px] font-black uppercase tracking-widest ${userStatus === s.id ? 'bg-slate-800 border-slate-600 text-white shadow-lg' : 'bg-black/20 border-slate-800 text-slate-500 hover:border-slate-700'}`}
+                         type="button"
+                         onClick={() => {
+                           playSynthSound?.('beep');
+                           setDraftStatus(s.id as any);
+                         }}
+                         className={`flex-1 flex items-center justify-center gap-2 py-3 rounded-xl border transition-all text-[9px] font-black uppercase tracking-widest ${draftStatus === s.id ? 'bg-slate-800 border-slate-600 text-white shadow-lg' : 'bg-black/20 border-slate-800 text-slate-500 hover:border-slate-700'}`}
                        >
                          <div className={`w-2 h-2 rounded-full ${s.color}`} />
                          {s.label}
                        </button>
                      ))}
                    </div>
+                </div>
+
+                <div>
+                   <label className="text-[9px] font-black uppercase text-slate-500 block mb-3">Arrival Frequency (Transmit Animation)</label>
+                   <div className="grid grid-cols-3 gap-2">
+                     {[
+                       { id: 'none', label: 'Standard' },
+                       { id: 'pulse', label: 'Warp Pulse' },
+                       { id: 'shake', label: 'Vibe Shake' },
+                       { id: 'neon', label: 'Neon Flare' },
+                       { id: 'glitch', label: 'Glitch Hack' },
+                       { id: 'bounce', label: 'Drop Bounce' }
+                     ].map(anim => (
+                       <button 
+                         key={anim.id}
+                         type="button"
+                         onClick={() => {
+                           playSynthSound?.('beep');
+                           setDraftProfile(p => ({ ...p, receiveAnimation: anim.id }));
+                         }}
+                         className={`flex items-center justify-center py-2.5 rounded-xl border transition-all text-[8px] font-black uppercase tracking-wider ${draftProfile.receiveAnimation === anim.id || (!draftProfile.receiveAnimation && anim.id === 'none') ? 'bg-indigo-600 border-indigo-400 text-white shadow-lg' : 'bg-black/20 border-slate-800 text-slate-500 hover:border-slate-700'}`}
+                       >
+                         {anim.label}
+                       </button>
+                     ))}
+                   </div>
+                </div>
+
+                {/* Reset Master Password Access */}
+                <div className="pt-5 border-t border-slate-800 space-y-4">
+                  <div className="flex items-center gap-1.5 text-[9px] font-black uppercase text-indigo-400 tracking-widest">
+                    <Key size={12} className="text-indigo-500 shrink-0" /> Restructure Master Key
+                  </div>
+
+                  {!isOriginalVerified ? (
+                    <div className="space-y-2 bg-black/40 p-4 border border-slate-800/80 rounded-2xl text-left">
+                      <label className="text-[8px] font-black uppercase text-slate-500 block">Original Master Password</label>
+                      <div className="flex gap-2">
+                        <input
+                          type="password"
+                          value={currentPasswordInput}
+                          onChange={(e) => {
+                            setCurrentPasswordInput(e.target.value);
+                            setPwdError('');
+                            setPwdSuccess('');
+                          }}
+                          placeholder="Verify original password to enable changes"
+                          className="flex-1 min-w-0 bg-black/80 border border-slate-800 rounded-xl px-3 py-2 text-xs text-white font-mono outline-none focus:border-indigo-500/50"
+                        />
+                        <button
+                          type="button"
+                          onClick={handleVerifyOriginalPassword}
+                          className="bg-indigo-600 hover:bg-indigo-500 text-white font-black text-[9px] uppercase px-4 py-2 rounded-xl transition-all shadow-md shadow-indigo-600/10 font-mono shrink-0"
+                        >
+                          Verify
+                        </button>
+                      </div>
+                    </div>
+                  ) : (
+                    <div className="space-y-3 bg-indigo-950/10 p-4 border border-indigo-500/20 rounded-2xl relative text-left">
+                      <div className="absolute top-3 right-3 text-[7px] bg-indigo-500/15 text-indigo-300 px-1.5 py-0.5 rounded border border-indigo-500/20 font-black uppercase tracking-widest font-mono">
+                        Verified
+                      </div>
+                      
+                      <div className="space-y-1.5">
+                        <label className="text-[8px] font-black uppercase text-slate-500 block">New Master Password</label>
+                        <input
+                          type="password"
+                          value={newPasswordInput}
+                          onChange={(e) => {
+                            setNewPasswordInput(e.target.value);
+                            setPwdError('');
+                          }}
+                          placeholder="Set custom master key (min 6 characters)"
+                          className="w-full bg-black border border-slate-800 rounded-xl px-3 py-2 text-xs text-white font-mono outline-none focus:border-indigo-500/50"
+                        />
+                      </div>
+
+                      <div className="flex gap-2">
+                        <button
+                          type="button"
+                          onClick={() => {
+                            setIsOriginalVerified(false);
+                            setCurrentPasswordInput('');
+                            setNewPasswordInput('');
+                            setPwdError('');
+                            setPwdSuccess('');
+                            playSynthSound('beep');
+                          }}
+                          className="flex-1 py-2 border border-slate-800 text-[8.5px] font-black uppercase text-slate-500 hover:bg-slate-800 rounded-xl transition-all"
+                        >
+                          Cancel
+                        </button>
+                        <button
+                          type="button"
+                          onClick={handleUpdateMasterPassword}
+                          className="flex-1 py-2 bg-indigo-600 text-[8.5px] font-black uppercase text-white hover:bg-indigo-500 rounded-xl transition-all shadow-md shadow-indigo-600/10"
+                        >
+                          Commit New Key
+                        </button>
+                      </div>
+                    </div>
+                  )}
+
+                  {pwdError && (
+                    <p className="text-[8.5px] font-black text-rose-500 uppercase tracking-widest pl-1 leading-none text-left">
+                      // {pwdError}
+                    </p>
+                  )}
+                  {pwdSuccess && (
+                    <p className="text-[8.5px] font-black text-emerald-400 uppercase tracking-widest pl-1 leading-none text-left">
+                      // {pwdSuccess}
+                    </p>
+                  )}
                 </div>
               </div>
 
@@ -3767,29 +4431,37 @@ interface MessageBubbleProps {
   currentUserProfile: AgentProfile;
   networkJam?: { jammedUntil: number; jammedBy: string } | null;
   playSynthSound?: (type: string) => void;
+  allAgents?: any[];
+  autoEncrypt?: boolean;
 }
 
 const REACTION_OPTIONS = [
-  { id: 'like', icon: <ThumbsUp size={12} />, label: 'THUMBS_UP' },
-  { id: 'love', icon: <Heart size={12} />, label: 'HEART_TRACE' },
-  { id: 'fire', icon: <Flame size={12} />, label: 'THERMAL_FLAME' },
-  { id: 'rocket', icon: <Rocket size={12} />, label: 'ORBITAL_UP' },
-  { id: 'target', icon: <Target size={12} />, label: 'DATA_TARGET' },
-  { id: 'skull', icon: <Skull size={12} />, label: 'DEAD_DROP' },
+  { emoji: '👍', label: 'THUMBS_UP' },
+  { emoji: '❤️', label: 'HEART_TRACE' },
+  { emoji: '🔥', label: 'THERMAL_FLAME' },
+  { emoji: '🚀', label: 'ORBITAL_UP' },
+  { emoji: '🎯', label: 'DATA_TARGET' },
+  { emoji: '💀', label: 'DEAD_DROP' },
 ];
 
-function MessageBubble({ msg, currentKey, currentShift, currentType, onAnalyze, currentUserProfile, networkJam, playSynthSound }: MessageBubbleProps) {
+function MessageBubble({ msg, currentKey, currentShift, currentType, onAnalyze, currentUserProfile, networkJam, playSynthSound, allAgents, autoEncrypt }: MessageBubbleProps) {
   const [isBurned, setIsBurned] = useState(false);
   const [timeLeft, setTimeLeft] = useState(15);
   const [isRevealed, setIsRevealed] = useState(false);
   const [hasRevealedOnce, setHasRevealedOnce] = useState(false);
   const [showReactionPicker, setShowReactionPicker] = useState(false);
   const [isAnalysing, setIsAnalysing] = useState(false);
+  const [showReadersList, setShowReadersList] = useState(false);
   
   const isMe = msg.sender === "LOCAL_USER" || msg.sender === auth.currentUser?.uid;
   const isPlaintext = !msg.crypto_key && msg.crypto_shift === 0;
-  const deciphered = isPlaintext ? msg.content : Cipher.decrypt(msg.content, currentKey, currentShift, currentType);
-  const isDecryptedProperly = isPlaintext || (msg.crypto_key === currentKey && msg.crypto_shift === currentShift && msg.crypto_type === currentType);
+  const deciphered = isPlaintext 
+    ? msg.content 
+    : (autoEncrypt 
+        ? Cipher.decrypt(msg.content, msg.crypto_key || "", msg.crypto_shift || 0, msg.crypto_type || CipherType.HYBRID)
+        : Cipher.decrypt(msg.content, currentKey, currentShift, currentType)
+      );
+  const isDecryptedProperly = isPlaintext || autoEncrypt || (msg.crypto_key === currentKey && msg.crypto_shift === currentShift && msg.crypto_type === currentType);
 
   // Decryption Reveal Logging Effect
   useEffect(() => {
@@ -3833,19 +4505,19 @@ function MessageBubble({ msg, currentKey, currentShift, currentType, onAnalyze, 
     updateLogs();
   }, [isDecryptedProperly, isRevealed, msg.id, msg.sender, msg.decryptLogs, currentUserProfile, networkJam]);
 
-  const handleToggleReaction = async (reactionId: string) => {
+  const handleToggleReaction = async (emoji: string) => {
     if (!auth.currentUser || !msg.id) return;
     const uid = auth.currentUser.uid;
     const currentReactions = { ...(msg.reactions || {}) };
-    const users = [...(currentReactions[reactionId] || [])];
+    const users = [...(currentReactions[emoji] || [])];
     
     if (users.includes(uid)) {
-      currentReactions[reactionId] = users.filter(id => id !== uid);
-      if (currentReactions[reactionId].length === 0) {
-        delete currentReactions[reactionId];
+      currentReactions[emoji] = users.filter(id => id !== uid);
+      if (currentReactions[emoji].length === 0) {
+        delete currentReactions[emoji];
       }
     } else {
-      currentReactions[reactionId] = [...users, uid];
+      currentReactions[emoji] = [...users, uid];
     }
 
     try {
@@ -3854,7 +4526,7 @@ function MessageBubble({ msg, currentKey, currentShift, currentType, onAnalyze, 
       });
       setShowReactionPicker(false);
     } catch (err) {
-      console.error("Reaction update failed", err);
+      handleFirestoreError(err, OperationType.UPDATE, `messages/${msg.id}`);
     }
   };
 
@@ -3891,8 +4563,63 @@ function MessageBubble({ msg, currentKey, currentShift, currentType, onAnalyze, 
 
   const hasReactions = msg.reactions && Object.keys(msg.reactions).length > 0;
 
+  const animType = msg.profile.receiveAnimation || 'none';
+  const glowHex = msg.profile.customColor || activeColor.hex;
+
+  let initialValues: any = { opacity: 0, scale: 0.95 };
+  let animateValues: any = { opacity: 1, scale: 1 };
+  let transitionStyle: any = { duration: 0.35, ease: 'easeOut' };
+
+  if (animType === 'pulse') {
+    initialValues = { opacity: 0, scale: 0.4 };
+    animateValues = { opacity: 1, scale: [0.4, 1.15, 0.95, 1] };
+    transitionStyle = { duration: 0.5, times: [0, 0.5, 0.8, 1] };
+  } else if (animType === 'shake') {
+    initialValues = { opacity: 0, x: -30 };
+    animateValues = { opacity: 1, x: [-20, 20, -10, 10, -5, 5, 0] };
+    transitionStyle = { duration: 0.6, times: [0, 0.15, 0.3, 0.45, 0.6, 0.75, 1] };
+  } else if (animType === 'neon') {
+    initialValues = { opacity: 0, scale: 0.95, filter: 'drop-shadow(0 0 0px rgba(0,0,0,0))' };
+    animateValues = { 
+      opacity: 1, 
+      scale: 1, 
+      filter: [
+        'drop-shadow(0 0 0px rgba(0,0,0,0))',
+        `drop-shadow(0 0 15px ${glowHex}E0)`,
+        `drop-shadow(0 0 3px ${glowHex}40)`
+      ]
+    };
+    transitionStyle = { duration: 0.8, times: [0, 0.4, 1] };
+  } else if (animType === 'glitch') {
+    initialValues = { opacity: 0, skewX: 0, scale: 0.95 };
+    animateValues = { 
+      opacity: 1, 
+      scale: 1,
+      skewX: [0, -15, 15, -7, 3, 0],
+      y: [0, -3, 3, -1, 1, 0]
+    };
+    transitionStyle = { duration: 0.5, times: [0, 0.15, 0.3, 0.45, 0.6, 1] };
+  } else if (animType === 'bounce') {
+    initialValues = { opacity: 0, y: 35 };
+    animateValues = { opacity: 1, y: [35, -10, 3, 0] };
+    transitionStyle = { duration: 0.55, times: [0, 0.6, 0.85, 1], ease: 'easeOut' };
+  } else {
+    // none (and default)
+    initialValues = { opacity: 0, y: 24 };
+    animateValues = { opacity: 1, y: 0 };
+    transitionStyle = { 
+      duration: 0.5, 
+      ease: [0.16, 1, 0.3, 1] 
+    };
+  }
+
   return (
-    <div className={`flex gap-4 max-w-[85%] ${isMe ? 'ml-auto flex-row-reverse text-right' : 'mr-auto text-left'}`}>
+    <motion.div 
+      initial={initialValues}
+      animate={animateValues}
+      transition={transitionStyle}
+      className={`flex gap-4 max-w-[85%] ${isMe ? 'ml-auto flex-row-reverse text-right' : 'mr-auto text-left'}`}
+    >
        <div 
         className="w-10 h-10 rounded-xl bg-black/40 border flex items-center justify-center shrink-0 self-end shadow-sm overflow-hidden"
         style={{ borderColor: msg.profile.customColor || activeColor.hex, color: msg.profile.customColor || activeColor.hex, boxShadow: `0 0 10px ${(msg.profile.customColor || activeColor.hex)}20` }}
@@ -3979,7 +4706,7 @@ function MessageBubble({ msg, currentKey, currentShift, currentType, onAnalyze, 
                 className={`p-1.5 rounded-lg bg-black/40 border border-white/10 hover:bg-black/60 text-slate-400 ${showReactionPicker ? 'bg-indigo-600/20 border-indigo-500/30 text-indigo-400 opacity-100' : ''}`}
                 title="Add Reaction"
              >
-                <Smile size={10} />
+                <Plus size={10} />
               </button>
 
            </div>
@@ -3992,14 +4719,14 @@ function MessageBubble({ msg, currentKey, currentShift, currentType, onAnalyze, 
                 exit={{ opacity: 0, scale: 0.9, y: 5 }}
                 className={`absolute z-10 bottom-full mb-2 ${isMe ? 'left-0' : 'right-0'} bg-slate-900 border border-slate-800 p-2 rounded-2xl flex gap-1 shadow-2xl`}
                >
-                 {REACTION_OPTIONS.map(opt => (
+                 {REACTION_OPTIONS.map(reactionOpt => (
                    <button 
-                    key={opt.id}
-                    onClick={() => handleToggleReaction(opt.id)}
-                    className={`w-8 h-8 flex items-center justify-center rounded-lg hover:bg-white/5 transition-colors ${msg.reactions?.[opt.id]?.includes(auth.currentUser?.uid || '') ? 'bg-indigo-500/20 text-indigo-400' : 'text-slate-400 hover:text-white'}`}
-                    title={opt.label}
-                   >
-                     {opt.icon}
+                    key={reactionOpt.emoji}
+                     onClick={() => handleToggleReaction(reactionOpt.emoji)}
+                    className={`w-8 h-8 flex items-center justify-center text-[13px] rounded-lg hover:bg-white/5 transition-colors ${msg.reactions?.[reactionOpt.emoji]?.includes(auth.currentUser?.uid || '') ? 'bg-indigo-500/20 text-indigo-400 font-bold' : 'text-slate-400 hover:text-white'}`}
+                    title={reactionOpt.label}
+                    >
+                      {reactionOpt.emoji}
                    </button>
                  ))}
                </motion.div>
@@ -4009,17 +4736,17 @@ function MessageBubble({ msg, currentKey, currentShift, currentType, onAnalyze, 
 
          {hasReactions && (
            <div className={`flex flex-wrap gap-1 mt-1 ${isMe ? 'justify-end' : 'justify-start'}`}>
-             {Object.entries(msg.reactions || {}).map(([id, users]) => {
-               const opt = REACTION_OPTIONS.find(o => o.id === id);
+             {Object.entries(msg.reactions || {}).map(([emoji, users]) => {
+               const opt = REACTION_OPTIONS.find(o => o.emoji === emoji);
                if (!opt) return null;
                const isOwn = users.includes(auth.currentUser?.uid || '');
                return (
                  <button 
-                  key={id}
-                  onClick={() => handleToggleReaction(id)}
-                  className={`flex items-center gap-1.5 px-2 py-0.5 rounded-md border text-[9px] font-black tracking-widest transition-all ${isOwn ? 'bg-indigo-500/10 border-indigo-500/30 text-indigo-400' : 'bg-black/20 border-slate-800 text-slate-500 hover:border-slate-700'}`}
-                 >
-                   {opt.icon}
+                  key={emoji}
+                   onClick={() => handleToggleReaction(emoji)}
+                   className={`flex items-center gap-1 px-2 py-0.5 rounded-md border text-[10px] tracking-wide transition-all ${isOwn ? 'bg-indigo-500/10 border-indigo-500/30 text-indigo-400' : 'bg-black/20 border-slate-800 text-slate-500 hover:border-slate-700'}`}
+                  >
+                    <span>{emoji}</span>
                    <span>{users.length}</span>
                  </button>
                );
@@ -4059,11 +4786,20 @@ function MessageBubble({ msg, currentKey, currentShift, currentType, onAnalyze, 
 
           <div className={`flex gap-3 items-center px-1 ${isMe ? 'flex-row-reverse' : ''}`}>
            <span className="text-[8px] font-black uppercase tracking-widest text-slate-500 bg-black/20 px-1.5 py-0.5 rounded border border-slate-800/50">ALG: {msg.crypto_type}</span>
-           {isMe && msg.readBy && msg.readBy.length > 0 && (
-             <div className="flex items-center gap-0.5 text-indigo-400" title={`Read by ${msg.readBy.length} agents`}>
-               <Eye size={10} />
-               <span className="text-[7px] font-bold">{msg.readBy.length}</span>
-             </div>
+           {msg.readBy && msg.readBy.length > 0 && (
+             <button
+               type="button"
+               onClick={() => {
+                 playSynthSound?.('beep');
+                 setShowReadersList(!showReadersList);
+               }}
+               className="flex items-center gap-1 px-1.5 py-0.5 rounded border text-[8px] tracking-wide transition-all bg-black/20 border-slate-800/60 text-indigo-400 hover:border-indigo-500/30 font-mono font-bold"
+               title="Expand Decrypted/Read Receipts"
+             >
+               <Eye size={9} />
+               <span>SEEN: {msg.readBy.length}</span>
+               <span className="text-[6px] opacity-60 text-slate-400">{showReadersList ? '▼' : '▲'}</span>
+             </button>
            )}
            {isRevealed && (
              <span className="text-[7px] text-amber-500 font-black uppercase flex items-center gap-1">
@@ -4076,8 +4812,41 @@ function MessageBubble({ msg, currentKey, currentShift, currentType, onAnalyze, 
              </div>
            )}
          </div>
+
+         <AnimatePresence>
+           {showReadersList && msg.readBy && msg.readBy.length > 0 && (
+             <motion.div
+               initial={{ opacity: 0, height: 0 }}
+               animate={{ opacity: 1, height: 'auto' }}
+               exit={{ opacity: 0, height: 0 }}
+               className={`overflow-hidden mt-2 pt-2 border-t border-slate-800/40 flex flex-wrap gap-1.5 w-full ${isMe ? 'justify-end' : 'justify-start'}`}
+             >
+               <span className="text-[7px] font-black uppercase text-slate-500 tracking-widest flex items-center h-5 font-mono">
+                 DECRYPTED_BY:
+               </span>
+               {msg.readBy.map(uid => {
+                 const agent = allAgents?.find(a => a.id === uid);
+                 const agentCodename = agent?.profile?.codename || `AGENT_PROBE_${uid.slice(0, 4).toUpperCase()}`;
+                 const matchingColor = COLOR_OPTIONS.find(c => c.id === agent?.profile?.color) || COLOR_OPTIONS[0];
+                 const agentColor = agent?.profile?.customColor || matchingColor.hex;
+                 return (
+                   <div
+                     key={uid}
+                     className="flex items-center gap-1 bg-black/30 border border-slate-800/60 px-1.5 py-0.5 rounded-lg text-[8px] font-mono"
+                     style={{ borderColor: `${agentColor}33` }}
+                   >
+                     <span className="w-1 h-1 rounded-full shrink-0" style={{ backgroundColor: agentColor }} />
+                     <span className="font-extrabold uppercase tracking-tight" style={{ color: agentColor }}>
+                       {agentCodename}
+                     </span>
+                   </div>
+                 );
+               })}
+             </motion.div>
+           )}
+         </AnimatePresence>
        </div>
-    </div>
+    </motion.div>
   );
 }
 
